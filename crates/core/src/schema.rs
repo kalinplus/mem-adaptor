@@ -1,3 +1,7 @@
+//! Validates internal records and public artifacts against the five embedded, hand-authored schemas.
+//! The engine uses this boundary before relying on Reader output, plans, approvals, and receipts.
+//! Structural validity does not establish hash correctness, approval authority, or migration success.
+
 use std::sync::OnceLock;
 
 use anyhow::bail;
@@ -27,6 +31,10 @@ const SCHEMAS: [(&str, &str); 5] = [
     ("config", include_str!("../../../schema/config.schema.json")),
 ];
 
+/// Checks serialized data, timestamp formats, and safe JSON numbers using a registered schema.
+/// `name` must identify an embedded schema; trusted schema initialization and name lookup may panic on programmer errors.
+/// Returns the first data violation with its schema name and path, without echoing the offending value.
+/// Does not recompute identities or hashes, compare vector length to dimension, or verify an approval.
 pub fn validate(name: &str, value: &impl Serialize) -> Result<()> {
     static VALIDATORS: OnceLock<std::collections::BTreeMap<&str, Validator>> = OnceLock::new();
     let validators = VALIDATORS.get_or_init(|| {
@@ -66,6 +74,7 @@ pub fn validate(name: &str, value: &impl Serialize) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Checks valid-record acceptance and that an invalid scope is reported by path without its private value.
     #[test]
     fn invalid_runtime_records_are_rejected_without_echoing_values() {
         let vector: Value = serde_json::from_str(include_str!(

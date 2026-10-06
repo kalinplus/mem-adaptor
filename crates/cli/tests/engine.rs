@@ -1,3 +1,7 @@
+//! Exercises core planning and receipt behavior with synthetic Readers and an isolated OKF target.
+//! Reader-controlled records expose identity, metadata, governance, and history boundaries without real exports.
+//! Assertions prove only their stated scenarios; these implementation-based tests are not independent conformance.
+
 use std::fs;
 
 use mem_adaptor_core::canonical::*;
@@ -52,12 +56,15 @@ impl Reader for CrossSystemReader {
 }
 
 impl Reader for SyntheticReader {
+    /// Identifies the test Reader independently of the source systems carried by its records.
     fn id(&self) -> &'static str {
         "synthetic"
     }
+    /// Labels fixture output with a synthetic adapter version.
     fn version(&self) -> &'static str {
         "test"
     }
+    /// Claims every isolated fixture file as convertible memory without parsing its contents.
     fn claim(&self, files: &FileInventory) -> Vec<Claim> {
         files
             .keys()
@@ -68,6 +75,8 @@ impl Reader for SyntheticReader {
             })
             .collect()
     }
+    /// Returns supplied records unchanged so tests can inject metadata changes or invalid Reader claims.
+    /// Pairs each record with source fields and deliberately leaves one field unreported for engine auditing.
     fn read(&self, claim: &Claim, _: &SourceFs) -> mem_adaptor_core::Result<ReaderOutput> {
         Ok(ReaderOutput {
             source_records: self.0.iter().map(|record| SourceRecord {
@@ -83,6 +92,7 @@ impl Reader for SyntheticReader {
     }
 }
 
+/// Builds a minimal synthetic record with freshly derived identity and body hash, not vector placeholder hashes.
 fn record(id: &str) -> CanonicalRecord {
     let vector: serde_json::Value = serde_json::from_str(include_str!(
         "../../../schema/vectors/valid/canonical-minimal.json"
@@ -97,6 +107,7 @@ fn record(id: &str) -> CanonicalRecord {
     record
 }
 
+/// Creates an isolated source file; the target stays absent until a test explicitly applies a plan.
 fn fixture() -> TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::create_dir(directory.path().join("source")).unwrap();
@@ -104,6 +115,7 @@ fn fixture() -> TempDir {
     directory
 }
 
+/// Registers supplied synthetic records and an OKF Writer confined to the fixture's target path.
 fn engine(directory: &TempDir, records: Vec<CanonicalRecord>) -> Engine {
     let mut registry = Registry::default();
     registry.register_reader(SyntheticReader(records)).unwrap();
@@ -116,6 +128,7 @@ fn engine(directory: &TempDir, records: Vec<CanonicalRecord>) -> Engine {
     Engine { registry }
 }
 
+/// Builds default pass-policy settings without claiming user selection or disabling secret detection.
 fn policy() -> GatePolicy {
     GatePolicy {
         secrets: GateAction::Pass,
@@ -126,6 +139,8 @@ fn policy() -> GatePolicy {
     }
 }
 
+/// Applies an already planned fixture using a matching synthetic approval and returns its receipt.
+/// This helper writes the temporary target; its report references are labels, not saved report files.
 fn apply(engine: &Engine, report: &PlanReport) -> ReceiptReport {
     engine
         .apply(
@@ -144,6 +159,8 @@ fn apply(engine: &Engine, report: &PlanReport) -> ReceiptReport {
         .unwrap()
 }
 
+/// Checks omitted-field reporting and that metadata-only changes invalidate approval despite unchanged body hashes.
+/// The failed apply leaves the fixture target absent; the test does not establish general rollback guarantees.
 #[test]
 fn engine_exposes_reader_omissions_and_binds_metadata_to_approval() {
     let directory = fixture();
@@ -407,6 +424,7 @@ fn metadata_updates_are_written_and_consent_disables_export() {
     }
 }
 
+/// Checks that a forged canonical ID or inconsistent vector dimension stops planning before target creation.
 #[test]
 fn forged_identity_or_wrong_embedding_dimension_fails_before_writes() {
     for corrupt_identity in [true, false] {
