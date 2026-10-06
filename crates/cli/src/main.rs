@@ -1,3 +1,7 @@
+//! Implements the local CLI boundary: plan saves proposed work; apply records approval, writes, and saves a receipt.
+//! Registered adapters handle formats while the core engine checks the execution basis and read-back evidence.
+//! Approval is saved before engine checks; failures after writing may leave changed targets without a saved receipt.
+
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -57,6 +61,7 @@ enum Command {
     },
 }
 
+/// Presents masked ordinary errors and a nonzero exit; it does not recover or roll back target writes.
 fn main() {
     if let Err(error) = run() {
         eprintln!(
@@ -67,6 +72,9 @@ fn main() {
     }
 }
 
+/// Validates CLI paths/options and orchestrates plan or explicitly approved apply.
+/// Saves approval before engine recomputation and the receipt after engine completion; any error propagates.
+/// A saved approval is not a success receipt, and a later receipt-save error does not imply an unchanged target.
 fn run() -> Result<()> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
@@ -213,6 +221,7 @@ fn run() -> Result<()> {
                 backend: "local".into(),
                 approver: "local-user".into(),
             };
+            // Record the user's approval of this basis, even if subsequent recomputation refuses execution.
             write_json_new(&approval_path, &approval)?;
             let receipt = engine.apply(
                 &report,
@@ -220,6 +229,7 @@ fn run() -> Result<()> {
                 plan_path.to_string_lossy().into_owned(),
                 approval_path.to_string_lossy().into_owned(),
             )?;
+            // Engine execution is complete; receipt persistence can still fail after target writes.
             write_json_new(&receipt_path, &receipt)?;
             println!("Receipt: {} records.", receipt.entries.len());
             print_gate_summary(
@@ -234,6 +244,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// Registers local Readers and already selected target Writers; core code remains adapter-independent.
 fn engine(targets: &[(String, String, PathBuf)]) -> Result<Engine> {
     let mut registry = Registry::default();
     registry.register_reader(MarkdownReader)?;
@@ -249,6 +260,7 @@ fn engine(targets: &[(String, String, PathBuf)]) -> Result<Engine> {
     Ok(Engine { registry })
 }
 
+/// Prints finding counts and policy provenance without exposing detected values or claiming full PII coverage.
 fn print_gate_summary<'a>(policy: &GatePolicy, findings: impl Iterator<Item = &'a Finding>) {
     let findings: Vec<_> = findings.collect();
     let blocked = findings
@@ -268,6 +280,7 @@ fn print_gate_summary<'a>(policy: &GatePolicy, findings: impl Iterator<Item = &'
     }
 }
 
+/// Resolves existing path prefixes before overlap checks, retaining a not-yet-created suffix.
 fn normalize_path(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
     let mut existing = absolute.as_path();

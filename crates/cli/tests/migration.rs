@@ -1,3 +1,8 @@
+//! Exercises real CLI plan/approval/receipt artifacts and target bytes using isolated synthetic sources.
+//! Groups tests by report lifecycle, pre-write refusal, coverage/privacy, historical evidence, and ZIP integration.
+//! Helpers import the implementation-linked schemas; the small Python check is not full independent conformance.
+//! Reading order is not execution order, and these tests do not cover all post-write or receipt-save failures.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -7,6 +12,9 @@ use jsonschema::{Draft, Registry};
 use serde_json::Value;
 use tempfile::TempDir;
 
+// Test support: synthetic CLI invocations, byte snapshots, and local schema validation.
+
+/// Runs the built CLI with captured output and stage logs, without a terminal approval prompt.
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(args)
@@ -15,7 +23,9 @@ fn cli(args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Captures relative file paths and exact bytes to check target side effects, not just command status.
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    /// Recursively captures this isolated fixture's files; it is not a production snapshot backend.
     fn visit(root: &Path, path: &Path, output: &mut BTreeMap<String, Vec<u8>>) {
         for entry in fs::read_dir(path).unwrap() {
             let path = entry.unwrap().path();
@@ -36,6 +46,7 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     output
 }
 
+/// Creates two synthetic Markdown records with distinct newline forms and an initially absent target.
 fn fixture() -> TempDir {
     let directory = TempDir::new().unwrap();
     fs::create_dir(directory.path().join("source")).unwrap();
@@ -48,10 +59,12 @@ fn fixture() -> TempDir {
     directory
 }
 
+/// Saves a named plan with default settings without approving writes.
 fn plan(directory: &TempDir, name: &str) -> Output {
     plan_options(directory, name, &[])
 }
 
+/// Plans into this fixture's target, optionally selecting policy or prior receipt evidence.
 fn plan_options(directory: &TempDir, name: &str, options: &[&str]) -> Output {
     let source = directory.path().join("source");
     let target = format!("okf:{}", directory.path().join("target").display());
@@ -68,6 +81,7 @@ fn plan_options(directory: &TempDir, name: &str, options: &[&str]) -> Output {
     cli(&args)
 }
 
+/// Explicitly approves the named fixture plan; the CLI saves approval and, if completed, a receipt.
 fn apply(directory: &TempDir, name: &str) -> Output {
     cli(&[
         "apply",
@@ -76,10 +90,12 @@ fn apply(directory: &TempDir, name: &str) -> Output {
     ])
 }
 
+/// Reads an actual CLI-produced JSON artifact rather than a hand-built successful report.
 fn document(directory: &TempDir, name: &str) -> Value {
     serde_json::from_slice(&fs::read(directory.path().join(name)).unwrap()).unwrap()
 }
 
+/// Checks structure and formats against all five local schemas, not digest correctness or truth of a write.
 fn assert_schema(name: &str, document: &Value) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema");
     let mut registry = Registry::new();
@@ -115,6 +131,9 @@ fn assert_schema(name: &str, document: &Value) {
     assert!(errors.is_empty(), "{errors:?}");
 }
 
+// Report lifecycle and digest stability: proposed work is separate from actual write evidence.
+
+/// Checks a valid plan's coverage while proving all existing target bytes remain unchanged.
 #[test]
 fn plan_leaves_existing_target_bytes_unchanged() {
     let directory = fixture();
@@ -135,6 +154,7 @@ fn plan_leaves_existing_target_bytes_unchanged() {
     assert_eq!(report["entries"].as_array().unwrap().len(), 2);
 }
 
+/// Checks actual approval/receipt shape, supported read-back success, preserved source bytes, and stage logs.
 #[test]
 fn approved_apply_produces_verified_schema_valid_receipt() {
     let directory = fixture();
@@ -181,6 +201,38 @@ fn approved_apply_produces_verified_schema_valid_receipt() {
     }
 }
 
+/// Checks repeated planning preserves execution inputs and digest despite fresh report metadata.
+#[test]
+fn unchanged_source_produces_same_digest() {
+    let directory = fixture();
+    assert!(plan(&directory, "first.json").status.success());
+    assert!(plan(&directory, "second.json").status.success());
+    let first: Value =
+        serde_json::from_slice(&fs::read(directory.path().join("first.json")).unwrap()).unwrap();
+    let second: Value =
+        serde_json::from_slice(&fs::read(directory.path().join("second.json")).unwrap()).unwrap();
+    assert_eq!(first["plan_digest"], second["plan_digest"]);
+    assert_eq!(first["digest_inputs"], second["digest_inputs"]);
+}
+
+/// Recomputes this fixture's digest in Python without importing Rust; this subset does not cover all JCS cases.
+#[test]
+fn python_recomputes_digest_without_importing_engine() {
+    let directory = fixture();
+    assert!(plan(&directory, "plan.json").status.success());
+    let output = Command::new("python3").arg("-c").arg(
+        "import hashlib,json,sys; p=json.load(open(sys.argv[1])); b=json.dumps(p['digest_inputs'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode(); assert p['plan_digest']=='sha256:'+hashlib.sha256(b).hexdigest()"
+    ).arg(directory.path().join("plan.json")).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Pre-write refusal: consent, execution-basis freshness, and report paths are checked before target writes.
+
+/// Checks stale-source refusal before target creation and without a saved receipt; approval-file state is not asserted.
 #[test]
 fn changed_source_is_refused_before_target_write() {
     let directory = fixture();
@@ -201,19 +253,7 @@ fn changed_source_is_refused_before_target_write() {
     assert!(!directory.path().join("plan.receipt.json").exists());
 }
 
-#[test]
-fn unchanged_source_produces_same_digest() {
-    let directory = fixture();
-    assert!(plan(&directory, "first.json").status.success());
-    assert!(plan(&directory, "second.json").status.success());
-    let first: Value =
-        serde_json::from_slice(&fs::read(directory.path().join("first.json")).unwrap()).unwrap();
-    let second: Value =
-        serde_json::from_slice(&fs::read(directory.path().join("second.json")).unwrap()).unwrap();
-    assert_eq!(first["plan_digest"], second["plan_digest"]);
-    assert_eq!(first["digest_inputs"], second["digest_inputs"]);
-}
-
+/// Checks absent noninteractive consent produces neither target writes nor a local approval artifact.
 #[test]
 fn noninteractive_apply_requires_explicit_approval() {
     let directory = fixture();
@@ -227,6 +267,7 @@ fn noninteractive_apply_requires_explicit_approval() {
     assert!(!directory.path().join("plan.approval.json").exists());
 }
 
+/// Checks an output-report path inside the target is refused before creating that target.
 #[test]
 fn reports_cannot_write_into_source_or_target() {
     let directory = fixture();
@@ -242,6 +283,51 @@ fn reports_cannot_write_into_source_or_target() {
     assert!(!directory.path().join("target").exists());
 }
 
+/// Checks a target edit after planning invalidates the approved basis and preserves actual target bytes.
+#[test]
+fn target_change_after_approval_is_rejected_without_overwriting() {
+    let directory = fixture();
+    assert!(plan(&directory, "first.json").status.success());
+    assert!(apply(&directory, "first.json").status.success());
+    fs::write(
+        directory.path().join("source/a.md"),
+        "Approved source update",
+    )
+    .unwrap();
+    let previous = directory.path().join("first.receipt.json");
+    assert!(
+        plan_options(
+            &directory,
+            "update.json",
+            &["--previous-receipt", previous.to_str().unwrap()]
+        )
+        .status
+        .success()
+    );
+    let receipt = document(&directory, "first.receipt.json");
+    let entry = receipt["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source_record_id"] == "a.md")
+        .unwrap();
+    let path = directory
+        .path()
+        .join("target")
+        .join(format!("{}.md", entry["target_id"].as_str().unwrap()));
+    let target = fs::read_to_string(&path).unwrap();
+    fs::write(&path, format!("{target}\nConcurrent user edit")).unwrap();
+    let before = snapshot(&directory.path().join("target"));
+    let output = apply(&directory, "update.json");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("digest mismatch"));
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+}
+
+// Coverage and privacy: reports disclose gaps and policy without exposing detected values.
+
+/// Checks all supported synthetic signatures are reported and masked across pass, block, and allowlist modes.
+/// Checks policy-specific export counts; masking reports does not mean pass-policy target content is redacted.
 #[test]
 fn all_secret_signatures_stay_out_of_reports_and_output_in_every_policy() {
     let secrets = [
@@ -344,6 +430,7 @@ fn all_secret_signatures_stay_out_of_reports_and_output_in_every_policy() {
     }
 }
 
+/// Checks default policy provenance and the warning that an untracked nonempty target lacks deletion protection.
 #[test]
 fn default_policy_and_nonempty_target_warning_are_explicit() {
     let directory = fixture();
@@ -368,6 +455,49 @@ fn default_policy_and_nonempty_target_warning_are_explicit() {
     );
 }
 
+/// Checks unclaimed-file coverage and unsupported secret-reference omission while other records still migrate.
+#[test]
+fn unclaimed_files_and_secret_references_are_reported_without_exporting_values() {
+    let directory = fixture();
+    fs::write(directory.path().join("source/unknown.bin"), [0, 1, 2]).unwrap();
+    let fake = format!("ghp_TEST{}", "A".repeat(32));
+    fs::write(
+        directory.path().join("source/reference.md"),
+        format!("---\ntype: secretRef\npassword: TEST_METADATA_PASSWORD\n---\n{fake}"),
+    )
+    .unwrap();
+    assert!(plan(&directory, "plan.json").status.success());
+    let report = document(&directory, "plan.json");
+    assert!(
+        report["source_inventory"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "unknown.bin" && file["status"] == "unclaimed")
+    );
+    let entry = report["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source_record_id"] == "reference.md")
+        .unwrap();
+    assert_eq!(
+        entry["disposition"]["reason"]["code"],
+        "secret_reference_unsupported"
+    );
+    assert!(entry["sensitive_findings"].as_array().unwrap().len() >= 2);
+    assert!(apply(&directory, "plan.json").status.success());
+    assert_eq!(snapshot(&directory.path().join("target/memories")).len(), 2);
+    assert!(
+        !fs::read_to_string(directory.path().join("plan.json"))
+            .unwrap()
+            .contains(&fake)
+    );
+}
+
+// Historical evidence: skipped runs carry earlier proof without claiming fresh verification.
+
+/// Checks a no-new-write receipt preserves prior verified evidence and protects a later target deletion.
 #[test]
 fn empty_apply_preserves_deletion_protection_across_receipts() {
     let directory = fixture();
@@ -433,6 +563,7 @@ fn empty_apply_preserves_deletion_protection_across_receipts() {
     );
 }
 
+/// Checks stable target IDs for source updates and unresolved treatment without writes after both sides change.
 #[test]
 fn source_updates_use_stable_target_ids_and_double_changes_stay_unresolved() {
     let directory = fixture();
@@ -495,6 +626,7 @@ fn source_updates_use_stable_target_ids_and_double_changes_stay_unresolved() {
     assert_eq!(snapshot(&directory.path().join("target")), before);
 }
 
+/// Checks duplicate representative evidence is retained and does not resurrect a deleted target.
 #[test]
 fn duplicate_aliases_do_not_resurrect_deleted_survivors() {
     let directory = fixture();
@@ -560,99 +692,7 @@ fn duplicate_aliases_do_not_resurrect_deleted_survivors() {
     assert!(snapshot(&directory.path().join("target/memories")).is_empty());
 }
 
-#[test]
-fn unclaimed_files_and_secret_references_are_reported_without_exporting_values() {
-    let directory = fixture();
-    fs::write(directory.path().join("source/unknown.bin"), [0, 1, 2]).unwrap();
-    let fake = format!("ghp_TEST{}", "A".repeat(32));
-    fs::write(
-        directory.path().join("source/reference.md"),
-        format!("---\ntype: secretRef\npassword: TEST_METADATA_PASSWORD\n---\n{fake}"),
-    )
-    .unwrap();
-    assert!(plan(&directory, "plan.json").status.success());
-    let report = document(&directory, "plan.json");
-    assert!(
-        report["source_inventory"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|file| file["path"] == "unknown.bin" && file["status"] == "unclaimed")
-    );
-    let entry = report["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["source_record_id"] == "reference.md")
-        .unwrap();
-    assert_eq!(
-        entry["disposition"]["reason"]["code"],
-        "secret_reference_unsupported"
-    );
-    assert!(entry["sensitive_findings"].as_array().unwrap().len() >= 2);
-    assert!(apply(&directory, "plan.json").status.success());
-    assert_eq!(snapshot(&directory.path().join("target/memories")).len(), 2);
-    assert!(
-        !fs::read_to_string(directory.path().join("plan.json"))
-            .unwrap()
-            .contains(&fake)
-    );
-}
-
-#[test]
-fn python_recomputes_digest_without_importing_engine() {
-    let directory = fixture();
-    assert!(plan(&directory, "plan.json").status.success());
-    let output = Command::new("python3").arg("-c").arg(
-        "import hashlib,json,sys; p=json.load(open(sys.argv[1])); b=json.dumps(p['digest_inputs'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode(); assert p['plan_digest']=='sha256:'+hashlib.sha256(b).hexdigest()"
-    ).arg(directory.path().join("plan.json")).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn target_change_after_approval_is_rejected_without_overwriting() {
-    let directory = fixture();
-    assert!(plan(&directory, "first.json").status.success());
-    assert!(apply(&directory, "first.json").status.success());
-    fs::write(
-        directory.path().join("source/a.md"),
-        "Approved source update",
-    )
-    .unwrap();
-    let previous = directory.path().join("first.receipt.json");
-    assert!(
-        plan_options(
-            &directory,
-            "update.json",
-            &["--previous-receipt", previous.to_str().unwrap()]
-        )
-        .status
-        .success()
-    );
-    let receipt = document(&directory, "first.receipt.json");
-    let entry = receipt["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["source_record_id"] == "a.md")
-        .unwrap();
-    let path = directory
-        .path()
-        .join("target")
-        .join(format!("{}.md", entry["target_id"].as_str().unwrap()));
-    let target = fs::read_to_string(&path).unwrap();
-    fs::write(&path, format!("{target}\nConcurrent user edit")).unwrap();
-    let before = snapshot(&directory.path().join("target"));
-    let output = apply(&directory, "update.json");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("digest mismatch"));
-    assert_eq!(snapshot(&directory.path().join("target")), before);
-}
-
+/// Checks source disappearance carries prior write evidence across receipts and protects a subsequently deleted target.
 #[test]
 fn temporarily_missing_source_record_keeps_historical_deletion_state() {
     let directory = fixture();
@@ -707,6 +747,9 @@ fn temporarily_missing_source_record_keeps_historical_deletion_state() {
     assert!(!target.exists());
 }
 
+// ZIP integration: source preflight remains distinct from approved writes and receipt verification.
+
+/// Checks safe ZIP input yields verified output while dangerous paths fail without target or traversal writes.
 #[test]
 fn approved_safe_zip_is_migrated_and_malicious_zip_never_touches_target() {
     use std::io::Write;
