@@ -1,8 +1,13 @@
+//! Defines the plan and receipt contracts exchanged between the engine, CLI, and future conformance tools.
+//! Plans predict per-record treatment; receipts associate actual writes and read-back evidence with that plan.
+//! These types describe evidence, not approval enforcement, authenticated signatures, or rollback.
+
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::{EvidenceLevel, ReembedPlan, Verdict};
 use crate::governance::{Finding, GatePolicy};
 
+/// Describes how a record is treated for one target, independently of whether a write was verified.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Disposition {
@@ -13,6 +18,7 @@ pub enum Disposition {
     Rejected { rule: String },
 }
 
+/// Identifies a field-level transformation without embedding the original sensitive value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Change {
@@ -20,6 +26,7 @@ pub struct Change {
     pub kind: ChangeKind,
 }
 
+/// Classifies a declared mapping or loss; this vocabulary does not perform the transformation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
@@ -30,6 +37,7 @@ pub enum ChangeKind {
     MetadataChanged,
 }
 
+/// Explains why no new write is scheduled, including references to earlier or representative writes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OmissionReason {
@@ -42,6 +50,7 @@ pub enum OmissionReason {
     SecretReferenceUnsupported,
 }
 
+/// Explains a decision still needed before writing; the engine must not silently resolve it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UnresolvedReason {
@@ -53,6 +62,8 @@ pub enum UnresolvedReason {
     TargetUntracked,
 }
 
+/// Describes read-back evidence separately from disposition; verified is limited to compared supported fields.
+/// Unverifiable is a contract alternative, not a currently implemented fallback for read-back errors.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Verification {
@@ -61,6 +72,7 @@ pub enum Verification {
     Unverifiable { why: String },
 }
 
+/// Locates a read-back difference using paths and optional hashes rather than exposing field values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldDiff {
@@ -72,6 +84,7 @@ pub struct FieldDiff {
     pub actual_hash: Option<String>,
 }
 
+/// Names the kind of discrepancy represented by a field diff.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffKind {
@@ -80,6 +93,7 @@ pub enum DiffKind {
     Unexpected,
 }
 
+/// Records a Writer's declared coverage and read-back/update support, not independently proven capabilities.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
@@ -89,6 +103,7 @@ pub struct Capabilities {
     pub update: bool,
 }
 
+/// Associates a logical target with its Writer, location, and approval-time or receipt-time artifact evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetSpec {
@@ -98,6 +113,7 @@ pub struct TargetSpec {
     pub artifacts: Vec<TargetArtifact>,
 }
 
+/// Describes a relative native artifact; absent hash and size represent a missing file, not an empty file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetArtifact {
@@ -108,6 +124,7 @@ pub struct TargetArtifact {
     pub bytes: Option<u64>,
 }
 
+/// Explains canonical-to-native field correspondence and its mapping rule without embedding native payloads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetMapping {
@@ -116,6 +133,7 @@ pub struct TargetMapping {
     pub rule: String,
 }
 
+/// Identifies the Writer version and declared capabilities included in the execution basis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriterSpec {
@@ -124,6 +142,7 @@ pub struct WriterSpec {
     pub capabilities: Capabilities,
 }
 
+/// Identifies a Reader version involved in interpreting the source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdapterVersion {
@@ -131,6 +150,7 @@ pub struct AdapterVersion {
     pub version: String,
 }
 
+/// Locates the source and names its export/Reader context; it is not a copy of all source contents.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
@@ -140,6 +160,7 @@ pub struct SourceSpec {
     pub adapters: Vec<AdapterVersion>,
 }
 
+/// Explains which source files were claimed, only registered, or not recognized during planning.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceInventory {
@@ -147,6 +168,7 @@ pub struct SourceInventory {
     pub state: InventoryState,
 }
 
+/// Distinguishes an empty input inventory from one containing data, not complete conversion coverage.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InventoryState {
@@ -154,6 +176,7 @@ pub enum InventoryState {
     Empty,
 }
 
+/// Associates file-byte evidence with Reader coverage and optional registration/deletion counts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InventoryFile {
@@ -171,6 +194,7 @@ pub struct InventoryFile {
     pub deleted_count: Option<u64>,
 }
 
+/// Distinguishes parsing claims, registration-only handling, and files no Reader recognized.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InventoryStatus {
@@ -179,6 +203,7 @@ pub enum InventoryStatus {
     RegisteredOnly,
 }
 
+/// Records declared model-call facts and affected records/fields; its presence does not implement model calls.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCall {
@@ -190,6 +215,7 @@ pub struct ModelCall {
     pub remote: bool,
 }
 
+/// Distinguishes explicit model opt-in from calls attributed to a target.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelCallOrigin {
@@ -197,6 +223,7 @@ pub enum ModelCallOrigin {
     TargetTriggered,
 }
 
+/// Explains source-to-canonical field coverage separately from canonical-to-target mappings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldMapping {
@@ -206,6 +233,7 @@ pub struct FieldMapping {
     pub rule: Option<String>,
 }
 
+/// Makes a source coverage gap visible without embedding the original field value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnmappedField {
@@ -213,6 +241,7 @@ pub struct UnmappedField {
     pub reason: UnmappedReason,
 }
 
+/// Classifies why a source field lacks declared coverage; unknown does not necessarily mean discarded.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnmappedReason {
@@ -222,6 +251,8 @@ pub enum UnmappedReason {
     RegisteredOnly,
 }
 
+/// Predicts treatment for one canonical record and target, with coverage, losses, findings, and prior evidence.
+/// A preview is display-only; neither accepted nor prior_write proves a new write happened in this run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanEntry {
@@ -246,6 +277,7 @@ pub struct PlanEntry {
     pub duplicate_write: Option<DuplicateWrite>,
 }
 
+/// Binds per-target treatment, mapping, and relevant historical evidence into the plan digest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Prediction {
@@ -258,6 +290,7 @@ pub struct Prediction {
     pub duplicate_write: Option<DuplicateWrite>,
 }
 
+/// Associates stable identity, body/full-record hashes, and target predictions for approval comparison.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DigestRecord {
@@ -267,6 +300,8 @@ pub struct DigestRecord {
     pub predictions: Vec<Prediction>,
 }
 
+/// Defines the hashed execution basis, excluding presentation-only run IDs and timestamps.
+/// Source-manifest and report-entry consistency require additional engine checks, not just this hash.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DigestInputs {
@@ -276,6 +311,7 @@ pub struct DigestInputs {
     pub gate_policy: GatePolicy,
 }
 
+/// Records source-file hashes for change checks without copying the source bundle into the report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundleManifest {
@@ -286,6 +322,7 @@ pub struct BundleManifest {
     pub exported_at: Option<String>,
 }
 
+/// Associates a source-relative file path with its exact-byte hash and size.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestFile {
@@ -294,6 +331,7 @@ pub struct ManifestFile {
     pub bytes: u64,
 }
 
+/// Locates a reported parsing anomaly without treating it as a successful record conversion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Anomaly {
@@ -305,6 +343,7 @@ pub struct Anomaly {
     pub field_path: Option<String>,
 }
 
+/// Makes unavailable source layers and the strength of their supporting evidence explicit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceUnavailable {
@@ -314,6 +353,8 @@ pub struct SourceUnavailable {
     pub evidence_level: EvidenceLevel,
 }
 
+/// Explains proposed work before approval: input/target context, coverage, policy, losses, and execution basis.
+/// A schema-valid plan is neither permission to write nor proof that migration succeeded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanReport {
@@ -338,6 +379,8 @@ pub struct PlanReport {
     pub previous_receipt_ref: Option<String>,
 }
 
+/// Associates actual treatment with record/target identity and optional current verification.
+/// Skipped entries omit current verification but may retain historical or representative write evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReceiptEntry {
@@ -360,6 +403,7 @@ pub struct ReceiptEntry {
     pub duplicate_write: Option<DuplicateWrite>,
 }
 
+/// References a duplicate representative's write without claiming that the alias itself was written.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DuplicateWrite {
@@ -367,6 +411,8 @@ pub struct DuplicateWrite {
     pub prior_write: PriorWrite,
 }
 
+/// Carries a record's earlier actual write and verification for later comparison and deletion protection.
+/// Historical verified evidence is not a fresh verification of a skipped record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriorWrite {
@@ -377,6 +423,8 @@ pub struct PriorWrite {
     pub verification: Verification,
 }
 
+/// Reports actual dispositions and available write/read-back evidence, linked to the approved plan.
+/// Returning this value does not persist it; a later CLI save failure cannot undo target writes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReceiptReport {

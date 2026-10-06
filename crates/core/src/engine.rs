@@ -65,6 +65,9 @@ pub fn record_hash(record: &CanonicalRecord) -> Result<String> {
     Ok(content_hash(&crate::jcs::to_vec(record)?))
 }
 
+/// Creates a new masked JSON artifact without overwriting an existing report.
+/// Serialization/create/write errors propagate; a write failure may leave a partial file, not an atomic report.
+/// Masking detected secret patterns is not comprehensive PII cleansing or target-payload redaction.
 pub fn write_json_new(path: &Path, value: &impl Serialize) -> Result<()> {
     use std::io::Write;
     let mut document = serde_json::to_value(value)?;
@@ -197,10 +200,13 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Predicts treatment using no historical receipt; planning inspects inputs but does not invoke Writer writes.
     pub fn plan(&self, source: &Path, gate_policy: GatePolicy) -> Result<PlanReport> {
         self.plan_with_previous(source, gate_policy, None)
     }
 
+    /// Returns a validated plan with optional prior evidence; explicitly supplied invalid history is an error.
+    /// Source/adapter/validation errors propagate before target writes; saving the report belongs to the caller.
     pub fn plan_with_previous(
         &self,
         source: &Path,
@@ -210,6 +216,8 @@ impl Engine {
         Ok(self.prepare(source, gate_policy, previous)?.report)
     }
 
+    /// Rebuilds source coverage, target projections, and approval inputs for both plan and apply.
+    /// Checks policy, records, and supplied history; it may extract a ZIP to temporary storage but never writes targets.
     fn prepare(
         &self,
         source: &Path,
@@ -914,6 +922,10 @@ impl Engine {
         })
     }
 
+    /// Recomputes and checks the approved execution basis before writing eligible records.
+    /// Checks Writer-produced byte proofs and supported-field read-back, then returns a schema-valid receipt.
+    /// Later write/read-back errors may follow target changes; mismatches remain explicit rather than verified.
+    /// The caller saves the receipt; this function provides neither whole-run rollback nor an unverifiable fallback.
     pub fn apply(
         &self,
         approved: &PlanReport,
