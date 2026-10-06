@@ -1,3 +1,7 @@
+//! Tests source normalization, inventory, metadata integrity, and CLI/home round trips using synthetic inputs.
+//! Reader outputs are checked before engine planning; approved writes use isolated temporary OKF targets.
+//! Sections group test purposes for reading, not execution order; no real exports, model calls, or independent conformance.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -15,6 +19,9 @@ use mem_adaptor_writer_okf::OkfWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+// Test support: synthetic inventories, isolated filesystems, and explicit in-process approval.
+
+/// Converts inline synthetic text into an in-memory inventory without reading a user's files.
 fn files(entries: &[(&str, &str)]) -> FileInventory {
     entries
         .iter()
@@ -22,6 +29,7 @@ fn files(entries: &[(&str, &str)]) -> FileInventory {
         .collect()
 }
 
+/// Runs the supplied Reader's claims against in-memory files; parsing failures are test failures.
 fn read(reader: &dyn Reader, files: FileInventory) -> Vec<ReaderOutput> {
     let source = SourceFs {
         root: "/synthetic/source".into(),
@@ -34,6 +42,7 @@ fn read(reader: &dyn Reader, files: FileInventory) -> Vec<ReaderOutput> {
         .collect()
 }
 
+/// Loads the committed synthetic source fixture set; missing or malformed fixture paths fail test setup.
 fn fixture_files(name: &str) -> FileInventory {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/m4")
@@ -50,6 +59,7 @@ fn fixture_files(name: &str) -> FileInventory {
         .collect()
 }
 
+/// Copies one fixture set into a temporary source directory, leaving the target absent until apply.
 fn fixture(name: &str) -> TempDir {
     let directory = TempDir::new().unwrap();
     fs::create_dir(directory.path().join("source")).unwrap();
@@ -59,6 +69,7 @@ fn fixture(name: &str) -> TempDir {
     directory
 }
 
+/// Registers the three source Readers with a single OKF Writer at the test's isolated target path.
 fn engine(target: &Path) -> Engine {
     let mut registry = Registry::default();
     registry.register_reader(MarkdownReader).unwrap();
@@ -70,6 +81,7 @@ fn engine(target: &Path) -> Engine {
     Engine { registry }
 }
 
+/// Selects the tested secret disposition without claiming user choice or implementing the reserved PII policy.
 fn policy(action: GateAction) -> GatePolicy {
     GatePolicy {
         secrets: action,
@@ -80,6 +92,8 @@ fn policy(action: GateAction) -> GatePolicy {
     }
 }
 
+/// Applies an existing plan with matching synthetic approval, writing only the temporary target.
+/// Returns an in-memory receipt; plan/approval references are labels, not persisted report files.
 fn apply(engine: &Engine, plan: &PlanReport) -> ReceiptReport {
     engine
         .apply(
@@ -98,6 +112,9 @@ fn apply(engine: &Engine, plan: &PlanReport) -> ReceiptReport {
         .unwrap()
 }
 
+// Source normalization: preserve body and optional semantics under each Reader's explicit rules.
+
+/// Checks exact Markdown body/newline preservation, protected kind, tags, typed unknown metadata, and index counts.
 #[test]
 fn markdown_preserves_body_and_typed_unknown_metadata() {
     let output = read(&MarkdownReader, fixture_files("markdown"));
@@ -141,6 +158,7 @@ fn markdown_preserves_body_and_typed_unknown_metadata() {
     assert_eq!(crlf[0].records[0].content, "保留\r\nno trailing newline");
 }
 
+/// Checks project/session provenance and source modification time without inventing observation or validity times.
 #[test]
 fn claude_code_retains_session_provenance_without_inventing_fact_time() {
     let output = read(
@@ -179,6 +197,7 @@ fn claude_code_retains_session_provenance_without_inventing_fact_time() {
     );
 }
 
+/// Checks original saved-memory IDs, source deletion counts, disabled-memory consent, and alternate JSON wrappers.
 #[test]
 fn chatgpt_saved_memories_keep_ids_and_disabled_consent_and_count_deletions() {
     let output = read(&ChatgptReader, fixture_files("chatgpt"));
@@ -235,6 +254,8 @@ fn chatgpt_saved_memories_keep_ids_and_disabled_consent_and_count_deletions() {
     );
 }
 
+/// Checks retained date text, line diagnostics, unknown-kind reporting, stable normalized IDs, and duplicate-line omission.
+/// Date-only values must not become invented creation/observation timestamps.
 #[test]
 fn prompt_dates_are_preserved_but_never_promoted_to_rfc3339_fact_times() {
     let output = read(&ChatgptReader, fixture_files("chatgpt"));
@@ -308,6 +329,8 @@ fn prompt_dates_are_preserved_but_never_promoted_to_rfc3339_fact_times() {
     assert_eq!(duplicate[0].anomalies[0].code, "duplicate_prompt_line");
 }
 
+/// Checks new memory_files precedence, including an empty array, while retaining complete file bodies and metadata.
+/// A profile-shaped filename alone must not imply a protected kind or measured classification.
 #[test]
 fn claude_new_memory_files_win_even_when_empty_and_preserve_full_file_bytes() {
     let output = read(&ClaudeReader, fixture_files("claude"));
@@ -373,6 +396,7 @@ fn claude_new_memory_files_win_even_when_empty_and_preserve_full_file_bytes() {
     );
 }
 
+/// Checks legacy account/project blocks and project documents remain whole, scoped, and accompanied by source metadata.
 #[test]
 fn claude_legacy_blocks_and_project_documents_do_not_get_summarized_or_split() {
     let legacy = read(
@@ -423,6 +447,9 @@ fn claude_legacy_blocks_and_project_documents_do_not_get_summarized_or_split() {
     );
 }
 
+// Inventory: recognition and registration are not conversion into memory records.
+
+/// Checks disjoint Reader claims for overlapping JSON filenames and refuses to guess the origin of isolated empty transcripts.
 #[test]
 fn shared_json_names_and_empty_transcripts_are_claimed_unambiguously() {
     let mut inventory = FileInventory::new();
@@ -455,6 +482,71 @@ fn shared_json_names_and_empty_transcripts_are_claimed_unambiguously() {
     assert!(ClaudeReader.claim(&unknown).is_empty());
 }
 
+/// Checks recognized OKF indices/logs are registration-only, runtime artifacts excluded, and ordinary notes not misclassified.
+#[test]
+fn okf_indices_and_runtime_logs_are_registered_without_becoming_memories() {
+    let inventory = files(&[
+        (
+            "index.md",
+            "---\ntype: Index\nokf_version: '0.2'\n---\n- [Synthetic](memories/note.md)\n",
+        ),
+        ("log.md", "# Synthetic log\n"),
+        (".mem-adaptor/plan.md", "Never parse a runtime report."),
+        ("memories/note.md", "Synthetic memory."),
+    ]);
+    let claims = MarkdownReader.claim(&inventory);
+    assert_eq!(claims.len(), 3);
+    assert_eq!(
+        claims.iter().filter(|claim| claim.registered_only).count(),
+        2
+    );
+    let false_index = files(&[
+        (
+            "index.md",
+            "This ordinary note mentions okf_version: in its body.",
+        ),
+        ("log.md", "This is also an ordinary note."),
+    ]);
+    assert!(
+        MarkdownReader
+            .claim(&false_index)
+            .iter()
+            .all(|claim| !claim.registered_only)
+    );
+}
+
+/// Checks empty and registration-only sources report no records while retaining warnings, counts, and unavailable-layer evidence.
+#[test]
+fn empty_sources_and_registered_only_exports_report_no_memory_records() {
+    let directory = TempDir::new().unwrap();
+    fs::create_dir(directory.path().join("source")).unwrap();
+    let engine = engine(&directory.path().join("target"));
+    let report = engine
+        .plan(&directory.path().join("source"), policy(GateAction::Pass))
+        .unwrap();
+    assert_eq!(report.source_inventory.state, InventoryState::Empty);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("No memory records"))
+    );
+    fs::write(directory.path().join("source/user.json"), "{}").unwrap();
+    fs::write(directory.path().join("source/conversations.json"), "[]").unwrap();
+    let report = engine
+        .plan(&directory.path().join("source"), policy(GateAction::Pass))
+        .unwrap();
+    assert_eq!(report.source.system, "chatgpt");
+    assert_eq!(report.source_inventory.state, InventoryState::Empty);
+    assert_eq!(report.source_inventory.files[0].registered_count, Some(0));
+    assert_eq!(report.source_unavailable.len(), 3);
+    assert!(report.entries.is_empty());
+}
+
+// Home preservation: recovering metadata must not invent identities or resolve source/envelope conflicts.
+
+/// Checks approved fixture writes recover complete record hashes and original identities when the home becomes a source.
+/// Planning leaves the initial target absent; round-trip assertions cover these fixtures, not other OKF consumers.
 #[test]
 fn home_round_trip_restores_original_identity_scope_and_unknown_metadata() {
     for name in ["markdown", "chatgpt", "claude"] {
@@ -517,6 +609,52 @@ fn home_round_trip_restores_original_identity_scope_and_unknown_metadata() {
     }
 }
 
+/// Checks unequal original/envelope metadata fails rather than overwriting a source value.
+/// Nonconflicting new envelope members must survive beside original metadata.
+#[test]
+fn conflicting_original_and_house_metadata_are_not_silently_merged() {
+    let directory = fixture("markdown");
+    let target = directory.path().join("target");
+    let engine = engine(&target);
+    let plan = engine
+        .plan(&directory.path().join("source"), policy(GateAction::Pass))
+        .unwrap();
+    let receipt = apply(&engine, &plan);
+    let path = target.join(format!(
+        "{}.md",
+        receipt.entries[0].target_id.as_ref().unwrap()
+    ));
+    let text = fs::read_to_string(path).unwrap();
+    let edited = text.replacen(
+        "---\n",
+        "---\nname: Conflicting synthetic envelope name\n",
+        1,
+    );
+    let source = SourceFs {
+        root: "/synthetic/home".into(),
+        files: files(&[("memories/note.md", &edited)]),
+    };
+    let claim = MarkdownReader.claim(&source.files).remove(0);
+    let error = match MarkdownReader.read(&claim, &source) {
+        Ok(_) => panic!("Metadata conflict was silently resolved"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("Conflicting original and envelope source metadata")
+    );
+    let extra = text.replacen("---\n", "---\ncustom_envelope:\n  enabled: true\n", 1);
+    let recovered = read(&MarkdownReader, files(&[("memories/note.md", &extra)]));
+    let fields = &recovered[0].records[0].source_extra.as_ref().unwrap()["frontmatter"];
+    assert_eq!(fields["name"], "Synthetic preference");
+    assert_eq!(fields["custom_envelope"]["enabled"], true);
+}
+
+// Integrity and privacy: source metadata participates in approval binding and diagnostics must not echo values.
+
+/// Checks unchanged body hashes cannot hide metadata changes from approval binding.
+/// Secret-bearing metadata is rejected by block policy, leaves no target, and is absent from plan/receipt JSON.
 #[test]
 fn metadata_only_changes_are_hashed_and_secret_metadata_cannot_bypass_the_gate() {
     let directory = fixture("markdown");
@@ -573,130 +711,8 @@ fn metadata_only_changes_are_hashed_and_secret_metadata_cannot_bypass_the_gate()
     assert!(!serde_json::to_string(&receipt).unwrap().contains(&secret));
 }
 
-#[test]
-fn okf_indices_and_runtime_logs_are_registered_without_becoming_memories() {
-    let inventory = files(&[
-        (
-            "index.md",
-            "---\ntype: Index\nokf_version: '0.2'\n---\n- [Synthetic](memories/note.md)\n",
-        ),
-        ("log.md", "# Synthetic log\n"),
-        (".mem-adaptor/plan.md", "Never parse a runtime report."),
-        ("memories/note.md", "Synthetic memory."),
-    ]);
-    let claims = MarkdownReader.claim(&inventory);
-    assert_eq!(claims.len(), 3);
-    assert_eq!(
-        claims.iter().filter(|claim| claim.registered_only).count(),
-        2
-    );
-    let false_index = files(&[
-        (
-            "index.md",
-            "This ordinary note mentions okf_version: in its body.",
-        ),
-        ("log.md", "This is also an ordinary note."),
-    ]);
-    assert!(
-        MarkdownReader
-            .claim(&false_index)
-            .iter()
-            .all(|claim| !claim.registered_only)
-    );
-}
-
-#[test]
-fn empty_sources_and_registered_only_exports_report_no_memory_records() {
-    let directory = TempDir::new().unwrap();
-    fs::create_dir(directory.path().join("source")).unwrap();
-    let engine = engine(&directory.path().join("target"));
-    let report = engine
-        .plan(&directory.path().join("source"), policy(GateAction::Pass))
-        .unwrap();
-    assert_eq!(report.source_inventory.state, InventoryState::Empty);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|warning| warning.starts_with("No memory records"))
-    );
-    fs::write(directory.path().join("source/user.json"), "{}").unwrap();
-    fs::write(directory.path().join("source/conversations.json"), "[]").unwrap();
-    let report = engine
-        .plan(&directory.path().join("source"), policy(GateAction::Pass))
-        .unwrap();
-    assert_eq!(report.source.system, "chatgpt");
-    assert_eq!(report.source_inventory.state, InventoryState::Empty);
-    assert_eq!(report.source_inventory.files[0].registered_count, Some(0));
-    assert_eq!(report.source_unavailable.len(), 3);
-    assert!(report.entries.is_empty());
-}
-
-#[test]
-fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() {
-    for name in ["markdown", "chatgpt", "claude"] {
-        let directory = fixture(name);
-        let target = format!("okf:{}", directory.path().join("target").display());
-        let report_path = directory.path().join("plan.json");
-        let result = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
-            .args([
-                "plan",
-                directory.path().join("source").to_str().unwrap(),
-                "--to",
-                &target,
-                "--report",
-                report_path.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let value: Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
-        let report: PlanReport = serde_json::from_value(value.clone()).unwrap();
-        mem_adaptor_core::schema::validate("plan-report", &report).unwrap();
-        assert!(
-            value["entries"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|entry| entry.get("source_extra").is_none())
-        );
-        assert!(report.model_calls.is_empty());
-        assert!(!directory.path().join("target").exists());
-        assert!(
-            report
-                .anomalies
-                .iter()
-                .all(|anomaly| anomaly.code != "reader_unreported_field")
-        );
-    }
-}
-
-#[test]
-fn stable_masked_plan_reports_match_reviewed_snapshots() {
-    for name in ["markdown", "chatgpt", "claude"] {
-        let directory = fixture(name);
-        let mut report = engine(&directory.path().join("target"))
-            .plan(&directory.path().join("source"), policy(GateAction::Pass))
-            .unwrap();
-        report.run_id = "plan-synthetic".into();
-        report.created_at = "2026-01-02T03:04:05Z".into();
-        report.source.location = "/synthetic/source".into();
-        report.targets[0].location = "/synthetic/target".into();
-        report.digest_inputs.targets = report.targets.clone();
-        report.plan_digest = mem_adaptor_core::engine::plan_digest(&report.digest_inputs).unwrap();
-        let mut value = serde_json::to_value(&report).unwrap();
-        mem_adaptor_core::gate::mask_value(&mut value);
-        let snapshot_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("tests/fixtures/m4/snapshots/{name}.plan.json"));
-        let expected: Value = serde_json::from_slice(&fs::read(snapshot_path).unwrap()).unwrap();
-        assert_eq!(value, expected, "Snapshot differs for {name}");
-    }
-}
-
+/// Checks malformed export boundaries fail without echoing source values; conflicting content aliases produce a diagnostic.
+/// Equal aliases must not create redundant preserved metadata.
 #[test]
 fn malformed_export_boundaries_fail_without_echoing_sensitive_values() {
     for reader in [
@@ -749,6 +765,77 @@ fn malformed_export_boundaries_fail_without_echoing_sensitive_values() {
     assert!(alias[0].records[0].source_extra.is_none());
 }
 
+// CLI and archive integration: report contracts and explicit approval over the same synthetic source fixtures.
+
+/// Checks CLI registration for all three Readers, schema-valid plans, metadata-value exclusion, and no target/model calls.
+#[test]
+fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() {
+    for name in ["markdown", "chatgpt", "claude"] {
+        let directory = fixture(name);
+        let target = format!("okf:{}", directory.path().join("target").display());
+        let report_path = directory.path().join("plan.json");
+        let result = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
+            .args([
+                "plan",
+                directory.path().join("source").to_str().unwrap(),
+                "--to",
+                &target,
+                "--report",
+                report_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let value: Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        let report: PlanReport = serde_json::from_value(value.clone()).unwrap();
+        mem_adaptor_core::schema::validate("plan-report", &report).unwrap();
+        assert!(
+            value["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry.get("source_extra").is_none())
+        );
+        assert!(report.model_calls.is_empty());
+        assert!(!directory.path().join("target").exists());
+        assert!(
+            report
+                .anomalies
+                .iter()
+                .all(|anomaly| anomaly.code != "reader_unreported_field")
+        );
+    }
+}
+
+/// Compares masked complete plans to reviewed goldens after fixing only run/time/path fields and recomputing the digest.
+/// These normalized plans are snapshot evidence, not executable approval inputs.
+#[test]
+fn stable_masked_plan_reports_match_reviewed_snapshots() {
+    for name in ["markdown", "chatgpt", "claude"] {
+        let directory = fixture(name);
+        let mut report = engine(&directory.path().join("target"))
+            .plan(&directory.path().join("source"), policy(GateAction::Pass))
+            .unwrap();
+        report.run_id = "plan-synthetic".into();
+        report.created_at = "2026-01-02T03:04:05Z".into();
+        report.source.location = "/synthetic/source".into();
+        report.targets[0].location = "/synthetic/target".into();
+        report.digest_inputs.targets = report.targets.clone();
+        report.plan_digest = mem_adaptor_core::engine::plan_digest(&report.digest_inputs).unwrap();
+        let mut value = serde_json::to_value(&report).unwrap();
+        mem_adaptor_core::gate::mask_value(&mut value);
+        let snapshot_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/m4/snapshots/{name}.plan.json"));
+        let expected: Value = serde_json::from_slice(&fs::read(snapshot_path).unwrap()).unwrap();
+        assert_eq!(value, expected, "Snapshot differs for {name}");
+    }
+}
+
+/// Checks synthetic ZIP fixtures plan without a target, then write at least one verified record after explicit approval.
 #[test]
 fn reader_fixtures_work_through_zip_loading_and_explicit_apply() {
     use std::io::Write;
@@ -784,44 +871,4 @@ fn reader_fixtures_work_through_zip_loading_and_explicit_apply() {
                 .any(|entry| entry.verification == Some(Verification::Verified))
         );
     }
-}
-
-#[test]
-fn conflicting_original_and_house_metadata_are_not_silently_merged() {
-    let directory = fixture("markdown");
-    let target = directory.path().join("target");
-    let engine = engine(&target);
-    let plan = engine
-        .plan(&directory.path().join("source"), policy(GateAction::Pass))
-        .unwrap();
-    let receipt = apply(&engine, &plan);
-    let path = target.join(format!(
-        "{}.md",
-        receipt.entries[0].target_id.as_ref().unwrap()
-    ));
-    let text = fs::read_to_string(path).unwrap();
-    let edited = text.replacen(
-        "---\n",
-        "---\nname: Conflicting synthetic envelope name\n",
-        1,
-    );
-    let source = SourceFs {
-        root: "/synthetic/home".into(),
-        files: files(&[("memories/note.md", &edited)]),
-    };
-    let claim = MarkdownReader.claim(&source.files).remove(0);
-    let error = match MarkdownReader.read(&claim, &source) {
-        Ok(_) => panic!("Metadata conflict was silently resolved"),
-        Err(error) => error,
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("Conflicting original and envelope source metadata")
-    );
-    let extra = text.replacen("---\n", "---\ncustom_envelope:\n  enabled: true\n", 1);
-    let recovered = read(&MarkdownReader, files(&[("memories/note.md", &extra)]));
-    let fields = &recovered[0].records[0].source_extra.as_ref().unwrap()["frontmatter"];
-    assert_eq!(fields["name"], "Synthetic preference");
-    assert_eq!(fields["custom_envelope"]["enabled"], true);
 }

@@ -68,9 +68,21 @@ Synthetic memory.
 下面是需要追问时的入口，不是额外阅读作业：
 
 1. `crates/core/src/canonical.rs`：模块说明与 `CanonicalRecord` 的必需/可选分组，不必逐字段读。
-2. `crates/core/tests/support/mod.rs`：`canonical()` 与 `canonical_full()` 展示缺失和携带可选信息。
-3. `crates/core/tests/schema_consistency.rs`：必需字段逐项删除测试、最小/完整样例测试、
+2. `crates/core/src/reader.rs`：`record()` 建基础信息，`finish()` 保留未知元数据；
+   `crates/reader-markdown/src/lib.rs` 的 `read()` 把例子读成记录，不负责审批或写目标。
+3. `crates/core/tests/support/mod.rs`：`canonical()` 与 `canonical_full()` 展示缺失和携带可选信息。
+4. `crates/core/tests/schema_consistency.rs`：必需字段逐项删除测试、最小/完整样例测试、
    仅向量元数据的往返测试，说明实际断言的边界。
+
+相关测试在原文件内按类别连续排放，模块、每个测试和 helper 都有英文意图说明：
+
+| 测试入口 | 从上到下的类别 |
+|---|---|
+| `crates/core/tests/schema_consistency.rs` | schema 自身有效性 → 正向序列化 → 结构拒绝 → 枚举形状 |
+| `crates/cli/tests/readers.rs` | 源归一 → 认领/登记清单 → 家目录保留 → 完整性与脱敏 → CLI/ZIP 集成 |
+| `crates/cli/tests/engine.rs` | 记录校验/字段覆盖 → 元数据感知去重 → 治理声明/历史依据 |
+
+这是阅读顺序，不改变 Rust 测试运行顺序；不要求从头到尾读完。
 
 类型、手写 schema、样例和已知源格式的一致性由 agent 核对，不要求用户自己发现未知字段。
 现有 schema 样例的 ID/哈希是占位值，完整样例为了覆盖序列化而组合了不同声明，

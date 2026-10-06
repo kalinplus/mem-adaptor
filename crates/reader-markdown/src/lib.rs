@@ -1,4 +1,6 @@
 //! Reader for local Markdown, Obsidian, Claude Code memory, and OKF homes.
+//! Converts claimed source files into paired canonical/original records before the engine validates and plans.
+//! Preserves body text and unknown metadata; indices are registration-only, with no extraction model or target writes.
 
 use anyhow::{Context, ensure};
 use mem_adaptor_core::Result;
@@ -11,13 +13,17 @@ use serde_json::{Value, json};
 pub struct MarkdownReader;
 
 impl Reader for MarkdownReader {
+    /// Registers this adapter under Markdown while records may retain a more specific source-system identity.
     fn id(&self) -> &'static str {
         "markdown"
     }
+    /// Reports the compiled adapter version for reproducible source interpretation.
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
 
+    /// Claims Markdown except runtime artifacts and ChatGPT Prompt files reserved for another adapter.
+    /// Marks MEMORY.md and recognized OKF root index/log files registration-only without converting their text.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
         let home = inventory.get("index.md").is_some_and(|bytes| {
             std::str::from_utf8(bytes)
@@ -46,6 +52,9 @@ impl Reader for MarkdownReader {
             .collect()
     }
 
+    /// Parses a claimed UTF-8 document and preserves its body, known source metadata, and unknown-field coverage.
+    /// Restores OKF identity or derives a filesystem record; malformed fields and conflicting envelope metadata fail.
+    /// Registration-only claims count links but emit no memory; this method does not write or approve migration.
     fn read(&self, claim: &Claim, source: &SourceFs) -> Result<ReaderOutput> {
         let mut output = normalize::output();
         let text = std::str::from_utf8(source.file(&claim.path))
@@ -67,6 +76,7 @@ impl Reader for MarkdownReader {
         }
         let mut record;
         if let Some(extension) = fields.pointer("/frontmatter/mem_adaptor") {
+            // A home copy keeps the original source identity instead of creating a new identity from its target path.
             ensure!(
                 fields["frontmatter"]["type"] == "Memory",
                 "Unexpected OKF memory type"
@@ -159,6 +169,7 @@ impl Reader for MarkdownReader {
             body,
             EvidenceLevel::Measured,
         );
+        // A filesystem scan is provenance for this import, not evidence that the scanner authored the memory.
         record.provenance.actor = "process:filesystem".into();
         record.provenance.actor_kind = ActorKind::Scan;
         record.provenance.method = "filesystem".into();
@@ -199,6 +210,7 @@ impl Reader for MarkdownReader {
         } else {
             "/frontmatter/updated_at"
         };
+        // Source modification time remains record time; absent or invalid time is not promoted to a fact timestamp.
         if let Some(value) = original.fields.pointer(time_path)
             && let Some(time) = normalize::time(value)
         {

@@ -1,6 +1,7 @@
 //! Exercises core planning and receipt behavior with synthetic Readers and an isolated OKF target.
 //! Reader-controlled records expose identity, metadata, governance, and history boundaries without real exports.
 //! Assertions prove only their stated scenarios; these implementation-based tests are not independent conformance.
+//! Sections group validation, field coverage, deduplication, and governance/history scenarios for reading, not execution order.
 
 use std::fs;
 
@@ -17,13 +18,18 @@ struct SyntheticReader(Vec<CanonicalRecord>);
 
 struct CrossSystemReader;
 
+// Test support: controlled Reader outputs and a temporary approved-write environment.
+
 impl Reader for CrossSystemReader {
+    /// Registers one fixture adapter whose output deliberately spans two different source-system identities.
     fn id(&self) -> &'static str {
         "synthetic-multi"
     }
+    /// Labels this multi-system fixture adapter rather than presenting a real export version.
     fn version(&self) -> &'static str {
         "test"
     }
+    /// Claims each isolated fixture file so the engine receives both systems through one Reader call.
     fn claim(&self, files: &FileInventory) -> Vec<Claim> {
         files
             .keys()
@@ -34,6 +40,8 @@ impl Reader for CrossSystemReader {
             })
             .collect()
     }
+    /// Emits colliding native IDs under distinct canonical identities, with findings/reference fields only on the left.
+    /// Intentionally leaves source-field coverage incomplete so the engine must associate evidence by canonical ID.
     fn read(&self, claim: &Claim, _: &SourceFs) -> mem_adaptor_core::Result<ReaderOutput> {
         let mut output = mem_adaptor_core::reader::output();
         for (system, fields) in [
@@ -159,6 +167,33 @@ fn apply(engine: &Engine, report: &PlanReport) -> ReceiptReport {
         .unwrap()
 }
 
+// Record validation and coverage: Reader claims are checked before any target write.
+
+/// Checks that a forged canonical ID or inconsistent vector dimension stops planning before target creation.
+#[test]
+fn forged_identity_or_wrong_embedding_dimension_fails_before_writes() {
+    for corrupt_identity in [true, false] {
+        let directory = fixture();
+        let mut record = record("example");
+        if corrupt_identity {
+            record.canonical_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+        } else {
+            record.embedding = Some(Embedding {
+                model: "synthetic-local".into(),
+                dim: 3,
+                vector: Some(vec![0.0, 1.0]),
+                normalized: None,
+            });
+        }
+        assert!(
+            engine(&directory, vec![record])
+                .plan(&directory.path().join("source"), policy())
+                .is_err()
+        );
+        assert!(!directory.path().join("target").exists());
+    }
+}
+
 /// Checks omitted-field reporting and that metadata-only changes invalidate approval despite unchanged body hashes.
 /// The failed apply leaves the fixture target absent; the test does not establish general rollback guarantees.
 #[test]
@@ -215,6 +250,7 @@ fn engine_exposes_reader_omissions_and_binds_metadata_to_approval() {
     assert!(!directory.path().join("target").exists());
 }
 
+/// Checks equal native IDs in different systems do not mix secret-reference dispositions, findings, or field coverage.
 #[test]
 fn native_id_collisions_do_not_cross_contaminate_findings_references_or_mappings() {
     let directory = fixture();
@@ -252,6 +288,9 @@ fn native_id_collisions_do_not_cross_contaminate_findings_references_or_mappings
     assert!(right.unmapped.is_empty());
 }
 
+// Metadata-aware deduplication: equal body text does not make distinct semantics interchangeable.
+
+/// Checks identical body text remains separate when scope or consent changes its meaning and permitted handling.
 #[test]
 fn identical_text_in_distinct_scopes_or_with_distinct_consent_is_not_deduplicated() {
     let directory = fixture();
@@ -277,178 +316,8 @@ fn identical_text_in_distinct_scopes_or_with_distinct_consent_is_not_deduplicate
     );
 }
 
-#[test]
-fn prior_verdict_is_reused_but_does_not_override_secret_blocking() {
-    let directory = fixture();
-    let mut original = record("example");
-    let cluster = content_hash(b"synthetic cluster");
-    original.conflict_cluster_id = Some(cluster.clone());
-    let engine = engine(&directory, vec![original.clone()]);
-    let plan = engine
-        .plan(&directory.path().join("source"), policy())
-        .unwrap();
-    let mut receipt = apply(&engine, &plan);
-    receipt.verdicts = vec![Verdict::Keep {
-        cluster_id: cluster.clone(),
-        canonical_ids: vec![canonical_id("synthetic", "other")],
-    }];
-    let previous = directory.path().join("previous.json");
-    write_json_new(&previous, &receipt).unwrap();
-    let report = engine
-        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
-        .unwrap();
-    assert_eq!(
-        report.entries[0].disposition,
-        Disposition::Omitted {
-            reason: OmissionReason::VerdictExcluded {
-                cluster_id: cluster
-            }
-        }
-    );
-    assert_eq!(apply(&engine, &report).verdicts, receipt.verdicts);
-    original.content = format!("ghp_TEST{}", "A".repeat(32));
-    original.content_hash = content_hash(original.content.as_bytes());
-    let mut blocked = policy();
-    blocked.secrets = GateAction::Block;
-    let mut registry = Registry::default();
-    registry
-        .register_reader(SyntheticReader(vec![original]))
-        .unwrap();
-    registry
-        .register_writer(
-            "home".into(),
-            OkfWriter::new(directory.path().join("target")),
-        )
-        .unwrap();
-    let report = Engine { registry }
-        .plan_with_previous(&directory.path().join("source"), blocked, Some(&previous))
-        .unwrap();
-    assert!(matches!(
-        report.entries[0].disposition,
-        Disposition::Rejected { .. }
-    ));
-}
-
-#[test]
-fn unverifiable_previous_writes_require_manual_target_confirmation() {
-    let directory = fixture();
-    let engine = engine(&directory, vec![record("example")]);
-    let plan = engine
-        .plan(&directory.path().join("source"), policy())
-        .unwrap();
-    let mut receipt = apply(&engine, &plan);
-    let verification = Verification::Unverifiable {
-        why: "Synthetic no-read-back target".into(),
-    };
-    receipt.entries[0].verification = Some(verification.clone());
-    receipt.entries[0]
-        .prior_write
-        .as_mut()
-        .unwrap()
-        .verification = verification;
-    let previous = directory.path().join("previous.json");
-    write_json_new(&previous, &receipt).unwrap();
-    let report = engine
-        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
-        .unwrap();
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("confirm target state manually"))
-    );
-    assert!(matches!(
-        report.entries[0].disposition,
-        Disposition::Unresolved { .. }
-    ));
-}
-
-#[test]
-fn metadata_updates_are_written_and_consent_disables_export() {
-    let directory = fixture();
-    let original = record("example");
-    let first_engine = engine(&directory, vec![original.clone()]);
-    let plan = first_engine
-        .plan(&directory.path().join("source"), policy())
-        .unwrap();
-    let receipt = apply(&first_engine, &plan);
-    let previous = directory.path().join("previous.json");
-    write_json_new(&previous, &receipt).unwrap();
-    let mut changed = original.clone();
-    changed.scope = Scope::Project;
-    changed.scope_qualifier = Some("updated-project".into());
-    let changed_engine = engine(&directory, vec![changed]);
-    let plan = changed_engine
-        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
-        .unwrap();
-    assert_eq!(plan.entries[0].disposition, Disposition::Accepted);
-    assert_eq!(
-        apply(&changed_engine, &plan).entries[0].verification,
-        Some(Verification::Verified)
-    );
-    let actual = changed_engine
-        .registry
-        .writer("home")
-        .unwrap()
-        .inspect(&receipt.entries[0].target_id.clone().unwrap())
-        .unwrap()
-        .unwrap();
-    assert_eq!(actual.scope, Scope::Project);
-    for (exportable, memory_enabled, expected) in [
-        (
-            Some(false),
-            None,
-            Disposition::Rejected {
-                rule: "consent_export_disabled".into(),
-            },
-        ),
-        (
-            None,
-            Some(false),
-            Disposition::Unresolved {
-                reason: UnresolvedReason::MemoryDisabled,
-            },
-        ),
-    ] {
-        let mut record = original.clone();
-        record.consent = Some(Consent {
-            exportable,
-            memory_enabled,
-            retention: None,
-            redact: None,
-        });
-        let report = engine(&directory, vec![record])
-            .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
-            .unwrap();
-        assert_eq!(report.entries[0].disposition, expected);
-    }
-}
-
-/// Checks that a forged canonical ID or inconsistent vector dimension stops planning before target creation.
-#[test]
-fn forged_identity_or_wrong_embedding_dimension_fails_before_writes() {
-    for corrupt_identity in [true, false] {
-        let directory = fixture();
-        let mut record = record("example");
-        if corrupt_identity {
-            record.canonical_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
-        } else {
-            record.embedding = Some(Embedding {
-                model: "synthetic-local".into(),
-                dim: 3,
-                vector: Some(vec![0.0, 1.0]),
-                normalized: None,
-            });
-        }
-        assert!(
-            engine(&directory, vec![record])
-                .plan(&directory.path().join("source"), policy())
-                .is_err()
-        );
-        assert!(!directory.path().join("target").exists());
-    }
-}
-
+/// Checks a duplicate alias whose scope changes gains its own verified write instead of borrowing representative history.
+/// The native target must then contain both records.
 #[test]
 fn duplicate_alias_with_changed_metadata_gets_its_own_record() {
     let directory = fixture();
@@ -509,4 +378,157 @@ fn duplicate_alias_with_changed_metadata_gets_its_own_record() {
             .count(),
         2
     );
+}
+
+// Governance and prior-write evidence: preserved declarations and history are not unconditional permission.
+
+/// Checks a saved human verdict is reused and carried forward, but cannot take precedence over secret blocking.
+#[test]
+fn prior_verdict_is_reused_but_does_not_override_secret_blocking() {
+    let directory = fixture();
+    let mut original = record("example");
+    let cluster = content_hash(b"synthetic cluster");
+    original.conflict_cluster_id = Some(cluster.clone());
+    let engine = engine(&directory, vec![original.clone()]);
+    let plan = engine
+        .plan(&directory.path().join("source"), policy())
+        .unwrap();
+    let mut receipt = apply(&engine, &plan);
+    receipt.verdicts = vec![Verdict::Keep {
+        cluster_id: cluster.clone(),
+        canonical_ids: vec![canonical_id("synthetic", "other")],
+    }];
+    let previous = directory.path().join("previous.json");
+    write_json_new(&previous, &receipt).unwrap();
+    let report = engine
+        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+        .unwrap();
+    assert_eq!(
+        report.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::VerdictExcluded {
+                cluster_id: cluster
+            }
+        }
+    );
+    assert_eq!(apply(&engine, &report).verdicts, receipt.verdicts);
+    original.content = format!("ghp_TEST{}", "A".repeat(32));
+    original.content_hash = content_hash(original.content.as_bytes());
+    let mut blocked = policy();
+    blocked.secrets = GateAction::Block;
+    let mut registry = Registry::default();
+    registry
+        .register_reader(SyntheticReader(vec![original]))
+        .unwrap();
+    registry
+        .register_writer(
+            "home".into(),
+            OkfWriter::new(directory.path().join("target")),
+        )
+        .unwrap();
+    let report = Engine { registry }
+        .plan_with_previous(&directory.path().join("source"), blocked, Some(&previous))
+        .unwrap();
+    assert!(matches!(
+        report.entries[0].disposition,
+        Disposition::Rejected { .. }
+    ));
+}
+
+/// Checks unverifiable historical writes produce a manual-confirmation warning and unresolved disposition, not overwrite approval.
+#[test]
+fn unverifiable_previous_writes_require_manual_target_confirmation() {
+    let directory = fixture();
+    let engine = engine(&directory, vec![record("example")]);
+    let plan = engine
+        .plan(&directory.path().join("source"), policy())
+        .unwrap();
+    let mut receipt = apply(&engine, &plan);
+    let verification = Verification::Unverifiable {
+        why: "Synthetic no-read-back target".into(),
+    };
+    receipt.entries[0].verification = Some(verification.clone());
+    receipt.entries[0]
+        .prior_write
+        .as_mut()
+        .unwrap()
+        .verification = verification;
+    let previous = directory.path().join("previous.json");
+    write_json_new(&previous, &receipt).unwrap();
+    let report = engine
+        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+        .unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("confirm target state manually"))
+    );
+    assert!(matches!(
+        report.entries[0].disposition,
+        Disposition::Unresolved { .. }
+    ));
+}
+
+/// Checks approved scope changes reach the native target with verified read-back.
+/// Later export-disabled or memory-disabled declarations are rejected/unresolved during planning, not silently exported.
+#[test]
+fn metadata_updates_are_written_and_consent_disables_export() {
+    let directory = fixture();
+    let original = record("example");
+    let first_engine = engine(&directory, vec![original.clone()]);
+    let plan = first_engine
+        .plan(&directory.path().join("source"), policy())
+        .unwrap();
+    let receipt = apply(&first_engine, &plan);
+    let previous = directory.path().join("previous.json");
+    write_json_new(&previous, &receipt).unwrap();
+    let mut changed = original.clone();
+    changed.scope = Scope::Project;
+    changed.scope_qualifier = Some("updated-project".into());
+    let changed_engine = engine(&directory, vec![changed]);
+    let plan = changed_engine
+        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+        .unwrap();
+    assert_eq!(plan.entries[0].disposition, Disposition::Accepted);
+    assert_eq!(
+        apply(&changed_engine, &plan).entries[0].verification,
+        Some(Verification::Verified)
+    );
+    let actual = changed_engine
+        .registry
+        .writer("home")
+        .unwrap()
+        .inspect(&receipt.entries[0].target_id.clone().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual.scope, Scope::Project);
+    for (exportable, memory_enabled, expected) in [
+        (
+            Some(false),
+            None,
+            Disposition::Rejected {
+                rule: "consent_export_disabled".into(),
+            },
+        ),
+        (
+            None,
+            Some(false),
+            Disposition::Unresolved {
+                reason: UnresolvedReason::MemoryDisabled,
+            },
+        ),
+    ] {
+        let mut record = original.clone();
+        record.consent = Some(Consent {
+            exportable,
+            memory_enabled,
+            retention: None,
+            redact: None,
+        });
+        let report = engine(&directory, vec![record])
+            .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+            .unwrap();
+        assert_eq!(report.entries[0].disposition, expected);
+    }
 }
