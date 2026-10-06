@@ -1,3 +1,7 @@
+//! Coordinates registered adapters through local planning, approved writes, and read-back receipts.
+//! The identity and hash helpers below distinguish source identity from content and metadata changes.
+//! Adapter-specific parsing and mapping stay in plugins; the engine does not provide multi-file rollback.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -21,10 +25,16 @@ use crate::source::load_source;
 pub const SCHEMA_VERSION: &str = "0.1.0";
 pub const CANONICAL_MODEL_VERSION: &str = "0.1.0";
 
+/// Returns a prefixed SHA-256 hash of the exact bytes, without whitespace or text normalization.
+/// Hashing record content detects body changes; it does not establish record identity.
 pub fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{}", HEXLOWER.encode(&Sha256::digest(bytes)))
 }
 
+/// Derives a stable, 32-character lowercase base32 ID from the source system and native record ID.
+/// A NUL separator distinguishes otherwise ambiguous concatenations; the first 20 hash bytes form the ID.
+/// Content and metadata do not affect it, so callers must supply a stable native ID within the source system.
+/// This helper neither validates the source ID nor performs content deduplication.
 pub fn canonical_id(system: &str, source_record_id: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(system.as_bytes());
@@ -35,14 +45,22 @@ pub fn canonical_id(system: &str, source_record_id: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Formats the current UTC time for reports and approvals, independently of record identity.
 pub fn timestamp() -> Result<String> {
     Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
 }
 
+/// Hashes the JCS serialization of records, target state, writers, and gate policy for approval binding.
+/// Callers supply deterministically ordered arrays; JCS orders object keys, not array elements.
+/// Report run IDs and generation times are outside DigestInputs and therefore do not affect this hash.
+/// Serialization or unsafe-number errors propagate; this helper does not approve a plan or inspect targets.
 pub fn plan_digest(inputs: &DigestInputs) -> Result<String> {
     Ok(content_hash(&crate::jcs::to_vec(inputs)?))
 }
 
+/// Hashes the complete serialized canonical record, including its body, source, scope, and consent.
+/// Unlike content_hash, it detects metadata-only changes without deriving a new canonical_id.
+/// Serialization or unsafe-number errors propagate; the hash itself does not enforce export permission.
 pub fn record_hash(record: &CanonicalRecord) -> Result<String> {
     Ok(content_hash(&crate::jcs::to_vec(record)?))
 }
@@ -359,6 +377,7 @@ impl Engine {
                 }
             }
             for record in output.records {
+                // Schema validation checks structure; re-derive identity and body hashes rather than trusting Reader claims.
                 crate::schema::validate("canonical-record", &record)?;
                 ensure!(
                     record.canonical_id
@@ -509,6 +528,7 @@ impl Engine {
         let mut entries = Vec::new();
         let mut targets = Vec::new();
         let mut writers = BTreeMap::new();
+        // Bind complete records so unchanged body text cannot hide scope, consent, or source metadata changes.
         let mut digest_records: BTreeMap<String, DigestRecord> = records
             .values()
             .map(|record| {
@@ -806,6 +826,7 @@ impl Engine {
         }
         ensure!(!targets.is_empty(), "At least one target is required");
         let writers: Vec<_> = writers.into_values().collect();
+        // BTreeMap iteration orders record IDs and target/writer keys; report run IDs and times stay outside the digest.
         let digest_inputs = DigestInputs {
             records: digest_records.into_values().collect(),
             targets: targets.clone(),
@@ -915,6 +936,7 @@ impl Engine {
             plan_digest(&approved.digest_inputs)? == approved.plan_digest,
             "Plan digest mismatch"
         );
+        // Re-read execution inputs and reject a stale approval before invoking any Writer write.
         let current = self.prepare(
             Path::new(&approved.source.location),
             approved.gate_policy.clone(),
@@ -1286,6 +1308,7 @@ fn audit_fields(output: &mut ReaderOutput) {
 mod tests {
     use super::*;
 
+    /// Checks repeatability, concatenation separation, and the fixed lowercase base32 ID shape.
     #[test]
     fn identities_are_stable_and_delimited() {
         assert_eq!(
@@ -1301,6 +1324,7 @@ mod tests {
         );
     }
 
+    /// Checks the underlying JCS library's UTF-16 key ordering and number formatting, not our safe-number gate.
     #[test]
     fn jcs_orders_keys_by_utf16_and_normalizes_numbers() {
         let value = serde_json::json!({"\u{e000}": -0.0, "\u{1f600}": 1.0, "a": 1e30});
