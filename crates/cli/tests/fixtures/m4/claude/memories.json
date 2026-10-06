@@ -1,0 +1,13 @@
+[
+  {
+    "account_uuid": "synthetic-account",
+    "account_extra": {"locale": "synthetic"},
+    "memory_files": [
+      {"path": "/profile.md", "content": "---\ntype: profile\nname: Synthetic identity\n---\nKeep the entire synthetic file.\r\n", "updated_at": "2026-01-02T03:04:05Z", "file_extra": {"enabled": true}},
+      {"path": "/context.md", "content": "Plain synthetic project context.", "type": "project"},
+      {"path": "/broken.md"}
+    ],
+    "conversations_memory": "Legacy synthetic content must not be reimported.",
+    "project_memories": {"synthetic-legacy": "Another legacy block that must not be reimported."}
+  }
+]

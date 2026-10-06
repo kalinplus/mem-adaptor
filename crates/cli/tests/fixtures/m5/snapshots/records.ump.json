@@ -1,0 +1,67 @@
+[
+  {
+    "ump": "1.0",
+    "id": "urn:ump:qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+    "kind": "semantic",
+    "body": {
+      "text": "# 合成标题\n\nKeep this body unchanged.\n",
+      "structured": {
+        "mem_adaptor": {
+          "canonical_id": "qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+          "source": {
+            "system": "markdown",
+            "adapter_version": "0.1.0",
+            "export_version": "unknown"
+          },
+          "source_record_id": "note.md",
+          "source_locator": "note.md",
+          "scope": "user",
+          "tags": [
+            "synthetic",
+            "中文"
+          ],
+          "content_hash": "sha256:cf1c0ca4bc109da2e277d1e190b023a4e7fc530e04274b7c3bb46a8bf56fdd55",
+          "dna_class": "dna",
+          "provenance": {
+            "actor": "process:filesystem",
+            "actor_kind": "scan",
+            "method": "filesystem",
+            "source_ref": "note.md"
+          },
+          "evidence_level": "measured",
+          "source_kind": "preference",
+          "source_extra": {
+            "frontmatter": {
+              "custom": {
+                "enabled": true,
+                "values": [
+                  2,
+                  null,
+                  "example"
+                ]
+              },
+              "title": "Original synthetic title",
+              "description": "Original source description"
+            }
+          }
+        },
+        "created_origin": "target_migration"
+      }
+    },
+    "scope": {
+      "owner": "mem-adaptor:sha256:0ea2c835089524b3214f8ca07293ad9f770483d3012bcf8f21ae8c493e2f1bd0",
+      "visibility": "private"
+    },
+    "time": {
+      "created": "2026-01-02T03:04:05Z"
+    },
+    "provenance": {
+      "actor": "process:mem-adaptor",
+      "actor_kind": "import",
+      "method": "local_migration",
+      "source": {
+        "ref": "note.md"
+      }
+    }
+  }
+]

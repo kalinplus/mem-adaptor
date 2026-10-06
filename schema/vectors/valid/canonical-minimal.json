@@ -1,0 +1,16 @@
+{
+  "schema": "canonical-record",
+  "expected_valid": true,
+  "document": {
+    "canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source": {"system": "markdown", "adapter_version": "0.1.0", "export_version": "unknown"},
+    "source_record_id": "notes/example.md",
+    "source_locator": "notes/example.md",
+    "scope": "user",
+    "content": "Synthetic memory.\n",
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dna_class": "standard",
+    "provenance": {"actor": "human:synthetic", "actor_kind": "user", "method": "filesystem"},
+    "evidence_level": "measured"
+  }
+}

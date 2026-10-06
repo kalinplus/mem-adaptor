@@ -1,0 +1,8 @@
+{
+  "memory": [
+    {"id": "synthetic-preference", "content": "Prefer concise answers.", "kind": "preference", "created_at": "2026-01-02T03:04:05Z", "extra": {"nested": [true, 2, null]}},
+    {"id": "synthetic-disabled", "text": "A disabled synthetic memory.", "type": "project", "enabled": false},
+    {"id": "synthetic-deleted", "content": "Never import this deleted synthetic memory.", "deleted": true},
+    {"id": "synthetic-missing-content", "type": "profile"}
+  ]
+}

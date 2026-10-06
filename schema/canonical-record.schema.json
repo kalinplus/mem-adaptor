@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mem-adaptor:schema:canonical-record:0.1.0",
+  "title": "Internal canonical record (not an interchange format)",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [{"$ref": "#/$defs/jcs_value"}],
+  "required": ["canonical_id", "source", "source_record_id", "source_locator", "scope", "content", "content_hash", "dna_class", "provenance", "evidence_level"],
+  "properties": {
+    "canonical_id": {"$ref": "#/$defs/canonical_id"},
+    "source": {"$ref": "#/$defs/source_identity"},
+    "source_record_id": {"$ref": "#/$defs/nonempty"},
+    "source_locator": {"$ref": "#/$defs/nonempty"},
+    "scope": {"enum": ["user", "project", "agent", "session", "tenant", "wing", "room"]},
+    "scope_qualifier": {"$ref": "#/$defs/nonempty"},
+    "owner_declared": {"type": "string", "description": "Untrusted source declaration, never an authorization principal."},
+    "content": {"type": "string"},
+    "content_hash": {"$ref": "#/$defs/hash"},
+    "source_kind": {"type": "string"},
+    "source_extra": {"type": "object", "minProperties": 1, "description": "Per-record unknown source metadata only; never a full source document or canonical snapshot."},
+    "dna_class": {"enum": ["dna", "standard"]},
+    "tags": {"$ref": "#/$defs/strings"},
+    "entities": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+    "relations": {"type": "array", "items": {"$ref": "#/$defs/relation"}},
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "updated_at": {"$ref": "#/$defs/timestamp"},
+    "observed_at": {"$ref": "#/$defs/timestamp"},
+    "valid_from": {"$ref": "#/$defs/timestamp"},
+    "valid_to": {"$ref": "#/$defs/timestamp"},
+    "expires_at": {"$ref": "#/$defs/timestamp"},
+    "ttl": {"$ref": "#/$defs/duration"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "evidence_level": {"$ref": "#/$defs/evidence_level"},
+    "consent": {"$ref": "#/$defs/consent"},
+    "approval": {"$ref": "#/$defs/approval_state"},
+    "sensitive_findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "deletion_intent": {"enum": ["delete", "redact", "deprecate"]},
+    "tombstone": {"$ref": "#/$defs/tombstone"},
+    "embedding": {"$ref": "#/$defs/embedding"},
+    "reembed_plan": {"$ref": "#/$defs/reembed_plan"},
+    "conflict_cluster_id": {"$ref": "#/$defs/hash"},
+    "conflict_candidates": {"type": "array", "items": {"$ref": "#/$defs/conflict_candidate"}},
+    "verdict": {"$ref": "#/$defs/verdict"}
+  },
+  "$defs": {
+    "jcs_value": {
+      "anyOf": [
+        {"type": ["null", "boolean", "string"]},
+        {"type": "number", "anyOf": [{"not": {"type": "integer"}}, {"minimum": -9007199254740991, "maximum": 9007199254740991}]},
+        {"type": "array", "items": {"$ref": "#/$defs/jcs_value"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/jcs_value"}}
+      ]
+    },
+    "nonempty": {"type": "string", "minLength": 1},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "canonical_id": {"type": "string", "pattern": "^[a-z2-7]{32}$"},
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "duration": {"type": "string", "format": "duration"},
+    "pointer": {"type": "string", "pattern": "^(?:/(?:[^~/]|~[01])*)*$"},
+    "evidence_level": {"enum": ["measured", "official", "third_party", "inferred"]},
+    "source_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["system", "adapter_version", "export_version"],
+      "properties": {
+        "system": {"$ref": "#/$defs/nonempty"},
+        "adapter_version": {"$ref": "#/$defs/nonempty"},
+        "export_version": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "entity": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nonempty"},
+        "kind": {"$ref": "#/$defs/nonempty"},
+        "label": {"type": "string"}
+      }
+    },
+    "relation": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "source", "target"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/nonempty"},
+        "source": {"$ref": "#/$defs/nonempty"},
+        "target": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["actor", "actor_kind", "method"],
+      "properties": {
+        "actor": {"$ref": "#/$defs/nonempty"},
+        "actor_kind": {"enum": ["user", "agent", "model", "import", "scan"]},
+        "method": {"$ref": "#/$defs/nonempty"},
+        "source_ref": {"$ref": "#/$defs/nonempty"},
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["source_ref"],
+            "properties": {
+              "source_ref": {"$ref": "#/$defs/nonempty"},
+              "weight": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        }
+      }
+    },
+    "consent": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "exportable": {"type": "boolean"},
+        "retention": {"$ref": "#/$defs/duration"},
+        "redact": {"$ref": "#/$defs/strings", "description": "Source JSON-path redaction declarations, retained without reinterpretation."},
+        "memory_enabled": {"type": "boolean"}
+      }
+    },
+    "approval_state": {
+      "type": "object", "additionalProperties": false, "required": ["state"],
+      "properties": {
+        "state": {"enum": ["pending", "approved", "denied"]},
+        "receipt_ref": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rule_id", "tier", "field_path", "byte_span", "disposition"],
+      "properties": {
+        "rule_id": {"$ref": "#/$defs/nonempty"},
+        "tier": {"enum": ["secret", "high_risk_pii", "personal_fact"]},
+        "field_path": {"$ref": "#/$defs/pointer"},
+        "key_hash": {"$ref": "#/$defs/hash", "description": "Present for object-key findings: field_path identifies the parent object, byte_span is within the key, and the raw key is never included."},
+        "byte_span": {
+          "type": "object", "additionalProperties": false, "required": ["start", "end"],
+          "properties": {
+            "start": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+            "end": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+          }
+        },
+        "disposition": {"enum": ["passed", "blocked", "allowlisted", "explicitly_allowed", "reported"]}
+      }
+    },
+    "tombstone": {
+      "type": "object", "additionalProperties": false, "required": ["deleted_at", "source_ref"],
+      "properties": {
+        "deleted_at": {"$ref": "#/$defs/timestamp"},
+        "source_ref": {"$ref": "#/$defs/nonempty"},
+        "actor": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "embedding": {
+      "type": "object", "additionalProperties": false, "required": ["model", "dim"],
+      "properties": {
+        "model": {"$ref": "#/$defs/nonempty"},
+        "dim": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "vector": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "normalized": {"type": "boolean"}
+      }
+    },
+    "reembed_plan": {
+      "type": "object", "additionalProperties": false, "required": ["canonical_ids", "model", "dim", "quality_impact"],
+      "properties": {
+        "canonical_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/canonical_id"}},
+        "model": {"$ref": "#/$defs/nonempty"},
+        "dim": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "quality_impact": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "conflict_candidate": {
+      "type": "object", "additionalProperties": false, "required": ["canonical_id", "basis"],
+      "properties": {
+        "canonical_id": {"$ref": "#/$defs/canonical_id"},
+        "basis": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "verdict": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "cluster_id", "canonical_ids"],
+          "properties": {
+            "status": {"const": "keep"},
+            "cluster_id": {"$ref": "#/$defs/hash"},
+            "canonical_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/canonical_id"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "cluster_id"],
+          "properties": {
+            "status": {"const": "needs_more_context"},
+            "cluster_id": {"$ref": "#/$defs/hash"}
+          }
+        }
+      ]
+    },
+    "gate_policy": {
+      "type": "object", "additionalProperties": false, "required": ["secrets", "high_risk_pii", "rule_allowlist", "origin", "user_selected"],
+      "properties": {
+        "secrets": {"enum": ["pass", "block"]},
+        "high_risk_pii": {"enum": ["pass", "block"]},
+        "rule_allowlist": {"type": "array", "items": {"$ref": "#/$defs/nonempty"}},
+        "origin": {"enum": ["user_choice", "default"]},
+        "user_selected": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"origin": {"const": "default"}}},
+          "then": {"properties": {"user_selected": {"const": false}}},
+          "else": {"properties": {"user_selected": {"const": true}}}
+        }
+      ]
+    }
+  }
+}

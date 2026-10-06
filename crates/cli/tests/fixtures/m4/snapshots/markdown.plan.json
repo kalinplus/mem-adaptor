@@ -1,0 +1,348 @@
+{
+  "schema_version": "0.1.0",
+  "canonical_model_version": "0.1.0",
+  "run_id": "plan-synthetic",
+  "created_at": "2026-01-02T03:04:05Z",
+  "source": {
+    "location": "/synthetic/source",
+    "system": "markdown",
+    "export_version": "unknown",
+    "adapters": [
+      {
+        "id": "markdown",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "source_inventory": {
+    "files": [
+      {
+        "path": "MEMORY.md",
+        "content_hash": "sha256:f41ce7eefe10adad3a1b50262af43d88f2cb947d7e0a6b565b7e4354bf3ad306",
+        "bytes": 90,
+        "status": "registered_only",
+        "reader": "markdown",
+        "layer": "index",
+        "registered_count": 2
+      },
+      {
+        "path": "note.md",
+        "content_hash": "sha256:fc1107bd89d5c51aee335bcc7345f67197dfee1e4c1dc2f297a0724fae1313e5",
+        "bytes": 173,
+        "status": "claimed",
+        "reader": "markdown",
+        "layer": "auto_memory"
+      }
+    ],
+    "state": "data_present"
+  },
+  "targets": [
+    {
+      "id": "home",
+      "location": "/synthetic/target",
+      "writer": "okf",
+      "artifacts": [
+        {
+          "path": "index.md"
+        },
+        {
+          "path": "log.md"
+        },
+        {
+          "path": "memories/qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x.md"
+        }
+      ]
+    }
+  ],
+  "writers": [
+    {
+      "id": "okf",
+      "version": "0.1.0",
+      "capabilities": {
+        "supported_fields": [
+          "/canonical_id",
+          "/source",
+          "/source_record_id",
+          "/source_locator",
+          "/scope",
+          "/scope_qualifier",
+          "/owner_declared",
+          "/content",
+          "/content_hash",
+          "/source_kind",
+          "/source_extra",
+          "/dna_class",
+          "/tags",
+          "/entities",
+          "/relations",
+          "/created_at",
+          "/updated_at",
+          "/observed_at",
+          "/valid_from",
+          "/valid_to",
+          "/expires_at",
+          "/ttl",
+          "/provenance",
+          "/evidence_level",
+          "/consent",
+          "/approval",
+          "/sensitive_findings",
+          "/deletion_intent",
+          "/tombstone",
+          "/reembed_plan",
+          "/conflict_cluster_id",
+          "/conflict_candidates",
+          "/verdict",
+          "/embedding/model",
+          "/embedding/dim",
+          "/embedding/normalized"
+        ],
+        "unsupported_fields": [
+          "/embedding/vector"
+        ],
+        "read_back": true,
+        "update": true
+      }
+    }
+  ],
+  "model_calls": [],
+  "gate_policy": {
+    "secrets": "pass",
+    "high_risk_pii": "pass",
+    "rule_allowlist": [],
+    "origin": "default",
+    "user_selected": false
+  },
+  "entries": [
+    {
+      "canonical_id": "qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+      "source_record_id": "note.md",
+      "source_locator": "note.md",
+      "content_hash": "sha256:77dfbf46da5b61c2203ee7a0e6319b29f5af2bbe1b1f581fbb15e40db7e6451b",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/body",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/frontmatter/type",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/frontmatter/type",
+          "canonical_path": "/dna_class",
+          "rule": "preference_to_preference_dna"
+        },
+        {
+          "source_path": "/frontmatter/tags",
+          "canonical_path": "/tags"
+        },
+        {
+          "source_path": "/frontmatter/name",
+          "canonical_path": "/source_extra/frontmatter/name",
+          "rule": "preserved_source_extra"
+        },
+        {
+          "source_path": "/frontmatter/custom/enabled",
+          "canonical_path": "/source_extra/frontmatter/custom/enabled",
+          "rule": "preserved_source_extra"
+        },
+        {
+          "source_path": "/frontmatter/custom/values",
+          "canonical_path": "/source_extra/frontmatter/custom/values",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/frontmatter/name",
+          "reason": "source_unknown"
+        },
+        {
+          "source_path": "/frontmatter/custom/enabled",
+          "reason": "source_unknown"
+        },
+        {
+          "source_path": "/frontmatter/custom/values",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "measured"
+    }
+  ],
+  "source_unavailable": [],
+  "anomalies": [],
+  "warnings": [
+    "PII detection is not implemented; high_risk_pii is reserved for D2–3.",
+    "Gate policy comes from defaults, not a user choice."
+  ],
+  "bundle_manifest": {
+    "source_system": "markdown",
+    "export_version": "unknown",
+    "files": [
+      {
+        "path": "MEMORY.md",
+        "content_hash": "sha256:f41ce7eefe10adad3a1b50262af43d88f2cb947d7e0a6b565b7e4354bf3ad306",
+        "bytes": 90
+      },
+      {
+        "path": "note.md",
+        "content_hash": "sha256:fc1107bd89d5c51aee335bcc7345f67197dfee1e4c1dc2f297a0724fae1313e5",
+        "bytes": 173
+      }
+    ]
+  },
+  "digest_inputs": {
+    "records": [
+      {
+        "canonical_id": "qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+        "content_hash": "sha256:77dfbf46da5b61c2203ee7a0e6319b29f5af2bbe1b1f581fbb15e40db7e6451b",
+        "record_hash": "sha256:3c7b33c725078bfa37e3d09e60440cda3a116ac12373c0de73b1171a58bac0ef",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "targets": [
+      {
+        "id": "home",
+        "location": "/synthetic/target",
+        "writer": "okf",
+        "artifacts": [
+          {
+            "path": "index.md"
+          },
+          {
+            "path": "log.md"
+          },
+          {
+            "path": "memories/qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x.md"
+          }
+        ]
+      }
+    ],
+    "writers": [
+      {
+        "id": "okf",
+        "version": "0.1.0",
+        "capabilities": {
+          "supported_fields": [
+            "/canonical_id",
+            "/source",
+            "/source_record_id",
+            "/source_locator",
+            "/scope",
+            "/scope_qualifier",
+            "/owner_declared",
+            "/content",
+            "/content_hash",
+            "/source_kind",
+            "/source_extra",
+            "/dna_class",
+            "/tags",
+            "/entities",
+            "/relations",
+            "/created_at",
+            "/updated_at",
+            "/observed_at",
+            "/valid_from",
+            "/valid_to",
+            "/expires_at",
+            "/ttl",
+            "/provenance",
+            "/evidence_level",
+            "/consent",
+            "/approval",
+            "/sensitive_findings",
+            "/deletion_intent",
+            "/tombstone",
+            "/reembed_plan",
+            "/conflict_cluster_id",
+            "/conflict_candidates",
+            "/verdict",
+            "/embedding/model",
+            "/embedding/dim",
+            "/embedding/normalized"
+          ],
+          "unsupported_fields": [
+            "/embedding/vector"
+          ],
+          "read_back": true,
+          "update": true
+        }
+      }
+    ],
+    "gate_policy": {
+      "secrets": "pass",
+      "high_risk_pii": "pass",
+      "rule_allowlist": [],
+      "origin": "default",
+      "user_selected": false
+    }
+  },
+  "plan_digest": "sha256:0af544d9fa4c31a4ea2bac62f361a50705cf2b3acfb1d768c0e7ad093398c129"
+}

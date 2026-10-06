@@ -1,0 +1,3 @@
+[
+  {"id": "synthetic-conversation", "mapping": {"synthetic-node": {"message": {"content": {"parts": ["Do not extract a synthetic chat into memory."]}}}}, "current_node": "synthetic-node"}
+]

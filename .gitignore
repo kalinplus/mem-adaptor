@@ -1,0 +1,51 @@
+# ─── Secrets and credentials — never commit ──────────────────────────
+# root .env holds ZHIPU_API_KEY; step .env files hold provider keys
+.env
+**/.env
+!**/.env.example
+# Panella approval credential
+**/approval-token
+
+# ─── Third-party clones: reference only, re-clonable, ~550 MB ────────
+lab/upstream/
+lab/graphiti-upstream/
+lab/**/upstream/
+
+# ─── Dependencies and build artifacts ────────────────────────────────
+**/.venv/
+**/node_modules/
+target/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# ─── Runtime state of each lab step ──────────────────────────────────
+# Claude Code config dirs carry session history and an ANTHROPIC_AUTH_TOKEN
+lab/step4-claude-mem/claude-config/
+lab/step4-agentmemory/claude-config/
+# memory stores: SQLite + Chroma + corpora
+lab/step4-claude-mem/data/
+lab/step4-agentmemory/data/
+lab/step2-mem0/qdrant_db/
+# real memory content written during the experiments
+lab/step1-basic-memory/memory-dir/
+# scratch notes and generated scaffolding
+lab/step4-claude-mem/scratch/
+lab/step4-agentmemory/scratch/
+lab/step5-memoria/project/
+lab/step5-memoria/bin/
+lab/step5-panella/box/
+
+# ─── Databases, logs, request traces, nonces ─────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+requests.json
+.lab-nonce*
+
+# ─── Memory experiment artifacts: contain personal data, keep local ──
+*.jsonl
+!fixtures/**/*.jsonl

@@ -1,0 +1,12 @@
+{
+  "schema": "approval-receipt",
+  "expected_valid": true,
+  "document": {
+    "schema_version": "0.1.0",
+    "receipt_id": "synthetic-approval",
+    "plan_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "approved_at": "2026-10-05T12:00:00Z",
+    "backend": "local",
+    "approver": "human:synthetic"
+  }
+}

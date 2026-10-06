@@ -1,0 +1,12 @@
+[
+  {
+    "uuid": "synthetic-project",
+    "name": "Synthetic project",
+    "project_extra": {"color": "blue"},
+    "docs": [
+      {"uuid": "synthetic-document", "filename": "knowledge.md", "content": "Synthetic knowledge document.\n", "doc_extra": {"count": 3}},
+      {"uuid": "synthetic-empty-document", "filename": "empty.md", "content": ""}
+    ],
+    "prompt_template": "Follow these synthetic project instructions.\n"
+  }
+]

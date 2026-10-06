@@ -1,0 +1,3 @@
+[
+  {"uuid": "synthetic-conversation", "project_uuid": "synthetic-project", "chat_messages": [{"sender": "human", "text": "Do not derive memories from this synthetic chat."}]}
+]

@@ -1,0 +1,9 @@
+{
+  "schema": "config",
+  "expected_valid": true,
+  "document": {
+    "schema_version": "0.1.0",
+    "gate_policy": {"secrets": "block", "high_risk_pii": "pass", "rule_allowlist": ["synthetic-rule"], "origin": "user_choice", "user_selected": true},
+    "home": {"format": "okf", "okf_version": "0.2"}
+  }
+}

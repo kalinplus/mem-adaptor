@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mem-adaptor:schema:config:0.1.0",
+  "title": "Parsed mem-adaptor TOML configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "gate_policy"],
+  "properties": {
+    "schema_version": {"const": "0.1.0"},
+    "gate_policy": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/gate_policy"},
+    "home": {
+      "type": "object", "additionalProperties": false, "required": ["format", "okf_version"],
+      "properties": {"format": {"const": "okf"}, "okf_version": {"const": "0.2"}}
+    }
+  }
+}

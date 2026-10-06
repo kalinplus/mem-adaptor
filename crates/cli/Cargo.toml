@@ -1,0 +1,27 @@
+[package]
+name = "mem-adaptor-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mem-adaptor"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+mem-adaptor-core.workspace = true
+mem-adaptor-reader-markdown.workspace = true
+mem-adaptor-reader-chatgpt.workspace = true
+mem-adaptor-reader-claude.workspace = true
+mem-adaptor-writer-ump.workspace = true
+mem-adaptor-writer-okf.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+jsonschema.workspace = true
+zip.workspace = true
+serde-saphyr.workspace = true

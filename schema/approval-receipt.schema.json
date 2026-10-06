@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mem-adaptor:schema:approval-receipt:0.1.0",
+  "title": "Approval bound to a migration plan digest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_id", "plan_digest", "approved_at", "backend", "approver"],
+  "properties": {
+    "schema_version": {"const": "0.1.0"},
+    "receipt_id": {"type": "string", "minLength": 1},
+    "plan_digest": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+    "approved_at": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/timestamp"},
+    "backend": {"type": "string", "minLength": 1},
+    "approver": {"type": "string", "minLength": 1, "description": "Approval principal, not a copied owner_declared value."}
+  }
+}

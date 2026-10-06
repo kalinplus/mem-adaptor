@@ -1,0 +1,968 @@
+{
+  "schema_version": "0.1.0",
+  "canonical_model_version": "0.1.0",
+  "run_id": "plan-synthetic",
+  "created_at": "2026-01-02T03:04:05Z",
+  "source": {
+    "location": "/synthetic/source",
+    "system": "chatgpt",
+    "export_version": "unknown",
+    "adapters": [
+      {
+        "id": "chatgpt",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "source_inventory": {
+    "files": [
+      {
+        "path": "conversations.json",
+        "content_hash": "sha256:b7e8f3b81efce1a65f686584c6acea6a11cbb04bcc5d72523e1a8c8737d8c6e9",
+        "bytes": 191,
+        "status": "registered_only",
+        "reader": "chatgpt",
+        "layer": "transcript",
+        "registered_count": 1
+      },
+      {
+        "path": "extract.chatgpt.md",
+        "content_hash": "sha256:1b0433a12313a9720f3b7fcdd775e5da54a33f10a3d4ef2d5da13c281146ca4c",
+        "bytes": 284,
+        "status": "claimed",
+        "reader": "chatgpt",
+        "layer": "prompt_extract"
+      },
+      {
+        "path": "memory.json",
+        "content_hash": "sha256:e940cae01d5c512081dd4e80f5bbecab5eeac3f153f0da60df5b68e6d7f4118e",
+        "bytes": 472,
+        "status": "claimed",
+        "reader": "chatgpt",
+        "layer": "saved_memory",
+        "deleted_count": 1
+      },
+      {
+        "path": "user.json",
+        "content_hash": "sha256:90b1e3d334ecfcb6e5aff39839153f324e2258c75d9bc2c23e4b36c200551974",
+        "bytes": 88,
+        "status": "registered_only",
+        "reader": "chatgpt",
+        "layer": "instruction",
+        "registered_count": 1
+      }
+    ],
+    "state": "data_present"
+  },
+  "targets": [
+    {
+      "id": "home",
+      "location": "/synthetic/target",
+      "writer": "okf",
+      "artifacts": [
+        {
+          "path": "index.md"
+        },
+        {
+          "path": "log.md"
+        },
+        {
+          "path": "memories/32cceomezamquevdonig4ogb53zjcnlr.md"
+        },
+        {
+          "path": "memories/5lcv2xedf4vciv6v3if7ezgbzqglqxke.md"
+        },
+        {
+          "path": "memories/6ggjlsblxwaxcfjtjvhxa4lhfuiqudnx.md"
+        },
+        {
+          "path": "memories/eukvwdu6oeaekv3e53j47wqsvoqhagug.md"
+        },
+        {
+          "path": "memories/fet52fhikwywlde2zfwtzmgn6etb4rkf.md"
+        },
+        {
+          "path": "memories/opse6at2wcmn2ljgsbg5a3kjmamjn2cl.md"
+        }
+      ]
+    }
+  ],
+  "writers": [
+    {
+      "id": "okf",
+      "version": "0.1.0",
+      "capabilities": {
+        "supported_fields": [
+          "/canonical_id",
+          "/source",
+          "/source_record_id",
+          "/source_locator",
+          "/scope",
+          "/scope_qualifier",
+          "/owner_declared",
+          "/content",
+          "/content_hash",
+          "/source_kind",
+          "/source_extra",
+          "/dna_class",
+          "/tags",
+          "/entities",
+          "/relations",
+          "/created_at",
+          "/updated_at",
+          "/observed_at",
+          "/valid_from",
+          "/valid_to",
+          "/expires_at",
+          "/ttl",
+          "/provenance",
+          "/evidence_level",
+          "/consent",
+          "/approval",
+          "/sensitive_findings",
+          "/deletion_intent",
+          "/tombstone",
+          "/reembed_plan",
+          "/conflict_cluster_id",
+          "/conflict_candidates",
+          "/verdict",
+          "/embedding/model",
+          "/embedding/dim",
+          "/embedding/normalized"
+        ],
+        "unsupported_fields": [
+          "/embedding/vector"
+        ],
+        "read_back": true,
+        "update": true
+      }
+    }
+  ],
+  "model_calls": [],
+  "gate_policy": {
+    "secrets": "pass",
+    "high_risk_pii": "pass",
+    "rule_allowlist": [],
+    "origin": "default",
+    "user_selected": false
+  },
+  "entries": [
+    {
+      "canonical_id": "32cceomezamquevdonig4ogb53zjcnlr",
+      "source_record_id": "sha256:dd7a250356b3cef8dc5fed5ea5620b2f44a44d798b417ec7a93e5f2ccb5cce84",
+      "source_locator": "extract.chatgpt.md:4",
+      "content_hash": "sha256:81aa589f6e9829f8cf8138a03ed7d29e1347ebeb9d4f19a4ceeda2e5f3c44c86",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/content",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/dna_class",
+          "rule": "explicit_standard"
+        },
+        {
+          "source_path": "/date",
+          "canonical_path": "/source_extra/date",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/date",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "third_party"
+    },
+    {
+      "canonical_id": "5lcv2xedf4vciv6v3if7ezgbzqglqxke",
+      "source_record_id": "sha256:84d2fafeaa5d4e63133f07f9e1bfc1f6751fa15147420e19908ef21f08b0472b",
+      "source_locator": "extract.chatgpt.md:3",
+      "content_hash": "sha256:26b4c61b382c3833a720c8ee1360b0528380a1490182fd25d0ed570f6eea1d55",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/content",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/dna_class",
+          "rule": "instruction_to_procedure_dna"
+        },
+        {
+          "source_path": "/date",
+          "canonical_path": "/source_extra/date",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/date",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "third_party"
+    },
+    {
+      "canonical_id": "6ggjlsblxwaxcfjtjvhxa4lhfuiqudnx",
+      "source_record_id": "sha256:b31dbf2ced0e6ba71f7f0893a1ca40eb1fd9f2a590852cddb07c512f13735c24",
+      "source_locator": "extract.chatgpt.md:5",
+      "content_hash": "sha256:36d127970ca0a931487b960deb5fe0d331492568d64adff32599ad3346152cda",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/content",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/dna_class",
+          "rule": "unknown_standard"
+        },
+        {
+          "source_path": "/date",
+          "canonical_path": "/source_extra/date",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/kind",
+          "reason": "source_unknown"
+        },
+        {
+          "source_path": "/date",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "inferred"
+    },
+    {
+      "canonical_id": "eukvwdu6oeaekv3e53j47wqsvoqhagug",
+      "source_record_id": "synthetic-preference",
+      "source_locator": "memory.json#/memory/0",
+      "content_hash": "sha256:6bece44bc8beb1c63d54c4839a6f3b42fe0a55977b2f87aabfc941990d0fa373",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/content",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/id",
+          "canonical_path": "/source_record_id"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/dna_class",
+          "rule": "preference_to_preference_dna"
+        },
+        {
+          "source_path": "/created_at",
+          "canonical_path": "/created_at"
+        },
+        {
+          "source_path": "/extra/nested",
+          "canonical_path": "/source_extra/extra/nested",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/extra/nested",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "third_party"
+    },
+    {
+      "canonical_id": "fet52fhikwywlde2zfwtzmgn6etb4rkf",
+      "source_record_id": "synthetic-disabled",
+      "source_locator": "memory.json#/memory/1",
+      "content_hash": "sha256:0ea6ea70036a81bce5c18fbb18cda4a7cf162611fb0d43e3345056683f1a4395",
+      "target": "home",
+      "disposition": {
+        "status": "unresolved",
+        "reason": {
+          "code": "memory_disabled"
+        }
+      },
+      "field_map": [
+        {
+          "source_path": "/text",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/id",
+          "canonical_path": "/source_record_id"
+        },
+        {
+          "source_path": "/type",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/type",
+          "canonical_path": "/dna_class",
+          "rule": "explicit_standard"
+        },
+        {
+          "source_path": "/enabled",
+          "canonical_path": "/consent/memory_enabled"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [],
+      "sensitive_findings": [],
+      "evidence_level": "third_party"
+    },
+    {
+      "canonical_id": "opse6at2wcmn2ljgsbg5a3kjmamjn2cl",
+      "source_record_id": "sha256:d05e49398dff9045691fe33b2ae195a3d6cf9ce423b681ae8f615c569c0a0641",
+      "source_locator": "extract.chatgpt.md:2",
+      "content_hash": "sha256:91f6a9d963f75e0bb8a985f6772def0fc5ea3cd57ac9947dfc6192cb9788b278",
+      "target": "home",
+      "disposition": {
+        "status": "accepted"
+      },
+      "field_map": [
+        {
+          "source_path": "/content",
+          "canonical_path": "/content"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/source_kind"
+        },
+        {
+          "source_path": "/kind",
+          "canonical_path": "/dna_class",
+          "rule": "profile_to_identity_dna"
+        },
+        {
+          "source_path": "/date",
+          "canonical_path": "/source_extra/date",
+          "rule": "preserved_source_extra"
+        }
+      ],
+      "target_map": [
+        {
+          "canonical_path": "/content",
+          "target_path": "/body",
+          "rule": "body_bytes_unchanged"
+        },
+        {
+          "canonical_path": "/content",
+          "target_path": "/frontmatter/title",
+          "rule": "first_nonempty_line_80_unicode_characters"
+        },
+        {
+          "canonical_path": "/source_locator",
+          "target_path": "/frontmatter/sources/0/resource",
+          "rule": "source_locator"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/generated/at",
+          "rule": "source_record_modified_time_not_fact_time"
+        },
+        {
+          "canonical_path": "",
+          "target_path": "/frontmatter/mem_adaptor",
+          "rule": "canonical_metadata_without_body_or_embedding_vector"
+        }
+      ],
+      "unmapped": [
+        {
+          "source_path": "/date",
+          "reason": "source_unknown"
+        }
+      ],
+      "sensitive_findings": [],
+      "evidence_level": "third_party"
+    }
+  ],
+  "source_unavailable": [
+    {
+      "system": "chatgpt",
+      "layer": "memory_summary",
+      "reason": "The export cannot prove coverage of the live synthesized memory layer.",
+      "evidence_level": "third_party"
+    },
+    {
+      "system": "chatgpt",
+      "layer": "provenance",
+      "reason": "Per-memory originating conversations are not available; prompt dates are self-reported.",
+      "evidence_level": "third_party"
+    },
+    {
+      "system": "chatgpt",
+      "layer": "instruction",
+      "reason": "User instruction field placement is not verified; file registered but not parsed.",
+      "evidence_level": "third_party"
+    }
+  ],
+  "anomalies": [
+    {
+      "source_locator": "extract.chatgpt.md:4",
+      "code": "invalid_prompt_date",
+      "line": 4,
+      "field_path": "/date"
+    },
+    {
+      "source_locator": "extract.chatgpt.md:5",
+      "code": "unknown_source_kind",
+      "line": 5,
+      "field_path": "/kind"
+    },
+    {
+      "source_locator": "extract.chatgpt.md",
+      "code": "invalid_prompt_line",
+      "line": 6,
+      "field_path": ""
+    },
+    {
+      "source_locator": "memory.json#/memory/3",
+      "code": "missing_memory_content",
+      "field_path": "/text"
+    }
+  ],
+  "warnings": [
+    "PII detection is not implemented; high_risk_pii is reserved for D2–3.",
+    "Gate policy comes from defaults, not a user choice."
+  ],
+  "bundle_manifest": {
+    "source_system": "chatgpt",
+    "export_version": "unknown",
+    "files": [
+      {
+        "path": "conversations.json",
+        "content_hash": "sha256:b7e8f3b81efce1a65f686584c6acea6a11cbb04bcc5d72523e1a8c8737d8c6e9",
+        "bytes": 191
+      },
+      {
+        "path": "extract.chatgpt.md",
+        "content_hash": "sha256:1b0433a12313a9720f3b7fcdd775e5da54a33f10a3d4ef2d5da13c281146ca4c",
+        "bytes": 284
+      },
+      {
+        "path": "memory.json",
+        "content_hash": "sha256:e940cae01d5c512081dd4e80f5bbecab5eeac3f153f0da60df5b68e6d7f4118e",
+        "bytes": 472
+      },
+      {
+        "path": "user.json",
+        "content_hash": "sha256:90b1e3d334ecfcb6e5aff39839153f324e2258c75d9bc2c23e4b36c200551974",
+        "bytes": 88
+      }
+    ]
+  },
+  "digest_inputs": {
+    "records": [
+      {
+        "canonical_id": "32cceomezamquevdonig4ogb53zjcnlr",
+        "content_hash": "sha256:81aa589f6e9829f8cf8138a03ed7d29e1347ebeb9d4f19a4ceeda2e5f3c44c86",
+        "record_hash": "sha256:3004bcce7d9332cb489916681c540a961dc47f31832546cefac988700e674fdb",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "canonical_id": "5lcv2xedf4vciv6v3if7ezgbzqglqxke",
+        "content_hash": "sha256:26b4c61b382c3833a720c8ee1360b0528380a1490182fd25d0ed570f6eea1d55",
+        "record_hash": "sha256:1011ac61d4fb096edce79da7c49a4201837d784f86d30f8300f1a90849b76ecc",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "canonical_id": "6ggjlsblxwaxcfjtjvhxa4lhfuiqudnx",
+        "content_hash": "sha256:36d127970ca0a931487b960deb5fe0d331492568d64adff32599ad3346152cda",
+        "record_hash": "sha256:a88be00783308ac5205887e8eca1def5fde23ec03ff16f42e9149529749edb94",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "canonical_id": "eukvwdu6oeaekv3e53j47wqsvoqhagug",
+        "content_hash": "sha256:6bece44bc8beb1c63d54c4839a6f3b42fe0a55977b2f87aabfc941990d0fa373",
+        "record_hash": "sha256:10082a2f124903f6660ad5e8aceab39bb3924e5eaf0408fcab8b85eaff06a89d",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "canonical_id": "fet52fhikwywlde2zfwtzmgn6etb4rkf",
+        "content_hash": "sha256:0ea6ea70036a81bce5c18fbb18cda4a7cf162611fb0d43e3345056683f1a4395",
+        "record_hash": "sha256:7eb53fefa2613cb38515682a18716bffca93bf54f15fee3d524624b60cc14aa7",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "unresolved",
+              "reason": {
+                "code": "memory_disabled"
+              }
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "canonical_id": "opse6at2wcmn2ljgsbg5a3kjmamjn2cl",
+        "content_hash": "sha256:91f6a9d963f75e0bb8a985f6772def0fc5ea3cd57ac9947dfc6192cb9788b278",
+        "record_hash": "sha256:6e0844940ebf6bb863624b3ea08bdf24cfa0629a7fc10138aba4d3b27152961d",
+        "predictions": [
+          {
+            "target": "home",
+            "disposition": {
+              "status": "accepted"
+            },
+            "target_map": [
+              {
+                "canonical_path": "/content",
+                "target_path": "/body",
+                "rule": "body_bytes_unchanged"
+              },
+              {
+                "canonical_path": "/content",
+                "target_path": "/frontmatter/title",
+                "rule": "first_nonempty_line_80_unicode_characters"
+              },
+              {
+                "canonical_path": "/source_locator",
+                "target_path": "/frontmatter/sources/0/resource",
+                "rule": "source_locator"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/generated/at",
+                "rule": "source_record_modified_time_not_fact_time"
+              },
+              {
+                "canonical_path": "",
+                "target_path": "/frontmatter/mem_adaptor",
+                "rule": "canonical_metadata_without_body_or_embedding_vector"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "targets": [
+      {
+        "id": "home",
+        "location": "/synthetic/target",
+        "writer": "okf",
+        "artifacts": [
+          {
+            "path": "index.md"
+          },
+          {
+            "path": "log.md"
+          },
+          {
+            "path": "memories/32cceomezamquevdonig4ogb53zjcnlr.md"
+          },
+          {
+            "path": "memories/5lcv2xedf4vciv6v3if7ezgbzqglqxke.md"
+          },
+          {
+            "path": "memories/6ggjlsblxwaxcfjtjvhxa4lhfuiqudnx.md"
+          },
+          {
+            "path": "memories/eukvwdu6oeaekv3e53j47wqsvoqhagug.md"
+          },
+          {
+            "path": "memories/fet52fhikwywlde2zfwtzmgn6etb4rkf.md"
+          },
+          {
+            "path": "memories/opse6at2wcmn2ljgsbg5a3kjmamjn2cl.md"
+          }
+        ]
+      }
+    ],
+    "writers": [
+      {
+        "id": "okf",
+        "version": "0.1.0",
+        "capabilities": {
+          "supported_fields": [
+            "/canonical_id",
+            "/source",
+            "/source_record_id",
+            "/source_locator",
+            "/scope",
+            "/scope_qualifier",
+            "/owner_declared",
+            "/content",
+            "/content_hash",
+            "/source_kind",
+            "/source_extra",
+            "/dna_class",
+            "/tags",
+            "/entities",
+            "/relations",
+            "/created_at",
+            "/updated_at",
+            "/observed_at",
+            "/valid_from",
+            "/valid_to",
+            "/expires_at",
+            "/ttl",
+            "/provenance",
+            "/evidence_level",
+            "/consent",
+            "/approval",
+            "/sensitive_findings",
+            "/deletion_intent",
+            "/tombstone",
+            "/reembed_plan",
+            "/conflict_cluster_id",
+            "/conflict_candidates",
+            "/verdict",
+            "/embedding/model",
+            "/embedding/dim",
+            "/embedding/normalized"
+          ],
+          "unsupported_fields": [
+            "/embedding/vector"
+          ],
+          "read_back": true,
+          "update": true
+        }
+      }
+    ],
+    "gate_policy": {
+      "secrets": "pass",
+      "high_risk_pii": "pass",
+      "rule_allowlist": [],
+      "origin": "default",
+      "user_selected": false
+    }
+  },
+  "plan_digest": "sha256:0f299257572b3fc21b8f82c2ea9249565e1fe6c32152823494bd086fa31ca6a7"
+}

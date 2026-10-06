@@ -1,0 +1,10 @@
+[package]
+name = "mem-adaptor-reader-chatgpt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mem-adaptor-core.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true

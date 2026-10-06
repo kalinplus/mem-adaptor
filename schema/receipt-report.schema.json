@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mem-adaptor:schema:receipt-report:0.1.0",
+  "title": "Migration receipt report",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [{"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/jcs_value"}],
+  "required": ["schema_version", "canonical_model_version", "run_id", "created_at", "source", "targets", "writers", "model_calls", "gate_policy", "bundle_manifest", "plan_digest", "plan_ref", "approval_receipt_ref", "entries", "verdicts"],
+  "properties": {
+    "schema_version": {"const": "0.1.0"},
+    "canonical_model_version": {"const": "0.1.0"},
+    "run_id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/nonempty"},
+    "created_at": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/timestamp"},
+    "source": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/source"},
+    "targets": {"type": "array", "minItems": 1, "items": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/target"}},
+    "writers": {"type": "array", "minItems": 1, "items": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/writer"}},
+    "model_calls": {"type": "array", "items": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/model_call"}},
+    "gate_policy": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/gate_policy"},
+    "bundle_manifest": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/manifest"},
+    "plan_digest": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+    "plan_ref": {"type": "string", "minLength": 1},
+    "approval_receipt_ref": {"type": "string", "minLength": 1},
+    "previous_receipt_ref": {"type": "string", "minLength": 1},
+    "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
+    "verdicts": {"type": "array", "items": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/verdict"}}
+  },
+  "$defs": {
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["canonical_id", "source_record_id", "source_locator", "content_hash", "target", "disposition", "target_map", "sensitive_findings", "evidence_level"],
+      "properties": {
+        "canonical_id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/canonical_id"},
+        "source_record_id": {"type": "string", "minLength": 1},
+        "source_locator": {"type": "string", "minLength": 1},
+        "content_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "target": {"type": "string", "minLength": 1},
+        "disposition": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/disposition"},
+        "target_map": {"type": "array", "items": {"$ref": "urn:mem-adaptor:schema:plan-report:0.1.0#/$defs/target_mapping"}},
+        "sensitive_findings": {"type": "array", "items": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/finding"}},
+        "evidence_level": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/evidence_level"},
+        "target_id": {"type": "string", "minLength": 1},
+        "verification": {"$ref": "#/$defs/verification"},
+        "prior_write": {"$ref": "#/$defs/prior_write"},
+        "duplicate_write": {"$ref": "#/$defs/duplicate_write"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"disposition": {"properties": {"status": {"enum": ["accepted", "transformed"]}}}}},
+          "then": {"required": ["target_id", "verification", "prior_write"]},
+          "else": {"not": {"required": ["verification"]}}
+        }
+      ]
+    },
+    "duplicate_write": {
+      "type": "object", "additionalProperties": false, "required": ["canonical_id", "prior_write"],
+      "properties": {
+        "canonical_id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/canonical_id"},
+        "prior_write": {"$ref": "#/$defs/prior_write"}
+      }
+    },
+    "prior_write": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_id", "content_hash", "record_hash", "target_hash", "verification"],
+      "properties": {
+        "target_id": {"type": "string", "minLength": 1},
+        "content_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "record_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "target_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "verification": {"$ref": "#/$defs/verification"}
+      }
+    },
+    "diff": {
+      "type": "object", "additionalProperties": false, "required": ["field_path", "kind"],
+      "properties": {
+        "field_path": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/pointer"},
+        "kind": {"enum": ["missing", "changed", "unexpected"]},
+        "expected_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "actual_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"}
+      }
+    },
+    "verification": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["status"],
+          "properties": {"status": {"const": "verified"}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "diff"],
+          "properties": {
+            "status": {"const": "mismatch"},
+            "diff": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/diff"}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "why"],
+          "properties": {"status": {"const": "unverifiable"}, "why": {"type": "string", "minLength": 1}}
+        }
+      ]
+    }
+  }
+}
