@@ -1,3 +1,7 @@
+//! Shared normalization helpers used by source Readers before engine validation and target planning.
+//! Build paired canonical/source records, record field coverage, and retain per-record unknown metadata.
+//! These helpers neither load source files nor approve/write targets; the engine checks the resulting records.
+
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -7,6 +11,7 @@ use crate::engine::{canonical_id, content_hash};
 use crate::plugins::*;
 use crate::reports::*;
 
+/// Starts an empty per-claim result so adapters can distinguish converted records from registration-only output.
 pub fn output() -> ReaderOutput {
     ReaderOutput {
         source_records: vec![],
@@ -18,6 +23,8 @@ pub fn output() -> ReaderOutput {
     }
 }
 
+/// Builds required identity, body integrity, and import provenance from adapter-supplied source facts.
+/// Uses explicit user/standard/unknown-version defaults and leaves optional semantics absent for the Reader to fill.
 pub fn record(
     system: &str,
     version: &str,
@@ -74,6 +81,7 @@ pub fn record(
     }
 }
 
+/// Pairs original parsed fields with the canonical identity so engine auditing stays record-specific.
 pub fn source(record: &CanonicalRecord, locator: &str, fields: Value) -> SourceRecord {
     SourceRecord {
         canonical_id: record.canonical_id.clone(),
@@ -85,6 +93,7 @@ pub fn source(record: &CanonicalRecord, locator: &str, fields: Value) -> SourceR
     }
 }
 
+/// Records a known source-to-canonical path association without copying values into reports.
 pub fn map(source: &mut SourceRecord, path: &str, canonical: &str) {
     source.field_map.push(FieldMapping {
         source_path: path.into(),
@@ -93,6 +102,8 @@ pub fn map(source: &mut SourceRecord, path: &str, canonical: &str) {
     });
 }
 
+/// Applies the agreed explicit-kind protection rules without guessing a category from body text or filenames.
+/// Unknown or missing kinds mark the interpretation inferred; unknown present kinds remain reported as unmapped.
 pub fn classify(record: &mut CanonicalRecord, source: &mut SourceRecord, path: &str) {
     let kind = source
         .fields
@@ -135,6 +146,8 @@ pub fn classify(record: &mut CanonicalRecord, source: &mut SourceRecord, path: &
     }
 }
 
+/// Converts RFC 3339 text or finite Unix seconds into a timestamp; unparseable values stay unavailable.
+/// Does not invent a timezone for date-only text or decide whether the value is a record time or fact time.
 pub fn time(value: &Value) -> Option<String> {
     if let Some(text) = value.as_str() {
         OffsetDateTime::parse(text, &Rfc3339)
@@ -153,11 +166,14 @@ pub fn time(value: &Value) -> Option<String> {
     }
 }
 
+/// Retains unmapped per-record metadata and its paths, then appends the canonical/source pair to the output.
+/// Rejects conflicting existing envelope metadata rather than picking a value; no target or report files are written.
 pub fn finish(
     output: &mut ReaderOutput,
     mut record: CanonicalRecord,
     mut source: SourceRecord,
 ) -> crate::Result<()> {
+    /// Removes an already mapped object path from the preservation copy, pruning emptied ancestors.
     fn remove(value: &mut Value, parts: &[&str]) {
         if let Some((head, tail)) = parts.split_first() {
             let key = head.replace("~1", "/").replace("~0", "~");
@@ -173,6 +189,7 @@ pub fn finish(
             }
         }
     }
+    /// Lists unmapped object leaves using escaped JSON Pointers, keeping arrays as intact source values.
     fn unknown(value: &Value, path: &str, fields: &mut Vec<UnmappedField>) {
         if let Some(object) = value.as_object() {
             for (key, value) in object {
@@ -207,6 +224,7 @@ pub fn finish(
     }
     if let Some(extra) = extra.as_object().filter(|extra| !extra.is_empty()) {
         let mut preserved = record.source_extra.take().unwrap_or_default();
+        /// Adds nonconflicting object members recursively and rejects unequal overlapping leaf values.
         fn merge(target: &mut Value, incoming: &Value) -> crate::Result<()> {
             if let (Some(target), Some(incoming)) = (target.as_object_mut(), incoming.as_object()) {
                 for (key, value) in incoming {
@@ -238,6 +256,7 @@ pub fn finish(
     Ok(())
 }
 
+/// Adds a source-local diagnostic by code/path/line without copying the problematic source value.
 pub fn anomaly(
     output: &mut ReaderOutput,
     locator: &str,
@@ -253,6 +272,8 @@ pub fn anomaly(
     });
 }
 
+/// Separates optional LF/CRLF frontmatter from an unchanged body without parsing or rewriting YAML.
+/// An opening delimiter without a closing delimiter is a parse error, not an ordinary body.
 pub fn markdown_document(text: &str) -> crate::Result<(Option<&str>, &str)> {
     let opening = if text.starts_with("---\r\n") {
         5
