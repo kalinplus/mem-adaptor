@@ -134,7 +134,9 @@ fn run() -> Result<()> {
                 .as_deref()
                 .map(normalize_path)
                 .transpose()?;
-            let report = engine.plan_with_previous(&source, policy, previous_receipt.as_deref())?;
+            let report = engine
+                .plan_with_previous(&source, policy, previous_receipt.as_deref())
+                .context("Planning failed before target writes; target unchanged. Check the source, policy and any explicitly supplied previous receipt before planning again")?;
             write_json_new(&report_path, &report)?;
             println!("Plan: {} records; target unchanged.", report.entries.len());
             print_gate_summary(
@@ -230,7 +232,9 @@ fn run() -> Result<()> {
                 approval_path.to_string_lossy().into_owned(),
             )?;
             // Engine execution is complete; receipt persistence can still fail after target writes.
-            write_json_new(&receipt_path, &receipt)?;
+            write_json_new(&receipt_path, &receipt).context(
+                "[S9] Final receipt save failed after engine execution; targets may already have changed and approval was saved. No reliable final receipt was saved. Inspect targets and report paths before deciding how to proceed; do not blindly retry",
+            )?;
             println!("Receipt: {} records.", receipt.entries.len());
             print_gate_summary(
                 &receipt.gate_policy,
