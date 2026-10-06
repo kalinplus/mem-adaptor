@@ -80,9 +80,12 @@ pub fn write_json_new(path: &Path, value: &impl Serialize) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("Cannot create report: {}", path.display()))?;
+    let mut file = options.open(path).with_context(|| {
+        format!(
+            "Cannot create report: {}",
+            crate::gate::mask(&path.to_string_lossy())
+        )
+    })?;
     file.write_all(&bytes)?;
     file.write_all(b"\n")?;
     Ok(())
