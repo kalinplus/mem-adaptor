@@ -1,3 +1,7 @@
+//! Synthetic typed examples shared by the core schema tests.
+//! Minimal and populated records expose required/optional shape; IDs and hashes are illustrative placeholders.
+//! Report constructors exercise serialization vocabulary, not engine execution or real platform coverage.
+
 use mem_adaptor_core::canonical::*;
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::reports::*;
@@ -6,6 +10,7 @@ pub const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub const HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub const TIME: &str = "2026-10-05T12:00:00Z";
 
+/// Supplies a default pass policy for shape tests without simulating a user's policy choice.
 pub fn policy() -> GatePolicy {
     GatePolicy {
         secrets: GateAction::Pass,
@@ -16,6 +21,7 @@ pub fn policy() -> GatePolicy {
     }
 }
 
+/// Builds the required record shape with all optional semantics absent, not a semantically verified Reader output.
 pub fn canonical() -> CanonicalRecord {
     CanonicalRecord {
         canonical_id: ID.into(),
@@ -65,6 +71,7 @@ pub fn canonical() -> CanonicalRecord {
     }
 }
 
+/// Populates every optional record field for serialization coverage; these combined declarations are not a migration scenario.
 pub fn canonical_full() -> CanonicalRecord {
     let mut record = canonical();
     record.scope_qualifier = Some("synthetic-project".into());
@@ -147,6 +154,7 @@ pub fn canonical_full() -> CanonicalRecord {
     record
 }
 
+/// Builds an empty plan shape with target/writer declarations and a placeholder digest.
 pub fn plan() -> PlanReport {
     let target = TargetSpec {
         id: "home".into(),
@@ -207,6 +215,7 @@ pub fn plan() -> PlanReport {
     }
 }
 
+/// Adds populated inventory, mappings, predictions, and diagnostics to exercise optional plan serialization.
 pub fn plan_full() -> PlanReport {
     let mut report = plan();
     report.source_inventory = SourceInventory {
@@ -298,6 +307,7 @@ pub fn plan_full() -> PlanReport {
     report
 }
 
+/// Builds an empty or populated receipt shape; illustrative verified entries are not evidence of a real write.
 pub fn receipt(full: bool) -> ReceiptReport {
     let plan = if full { plan_full() } else { plan() };
     ReceiptReport {

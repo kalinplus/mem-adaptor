@@ -1,3 +1,7 @@
+//! Checks the hand-authored internal schemas against synthetic vectors and Rust serialization.
+//! Exercises required-field rejection and optional-field preservation, not migration or target side effects.
+//! These implementation-linked tests are not the independent conformance runner; placeholder hashes prove shape only.
+
 mod support;
 
 use std::collections::BTreeMap;
@@ -19,14 +23,17 @@ const SCHEMAS: [&str; 5] = [
     "config",
 ];
 
+/// Locates committed schema assets relative to this test crate, not the shell's working directory.
 fn schema_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema")
 }
 
+/// Loads trusted synthetic JSON assets; unreadable or malformed assets are test setup failures.
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
+/// Loads all five internal contracts so cross-schema references use the same committed definitions.
 fn schemas() -> BTreeMap<String, Value> {
     SCHEMAS
         .into_iter()
@@ -39,6 +46,7 @@ fn schemas() -> BTreeMap<String, Value> {
         .collect()
 }
 
+/// Resolves local URNs and enables format assertions; invalid trusted schemas fail test setup.
 fn validator(schema: &Value) -> Validator {
     let mut registry = Registry::new();
     for document in schemas().into_values() {
@@ -54,6 +62,7 @@ fn validator(schema: &Value) -> Validator {
         .unwrap()
 }
 
+/// Builds one validator per root contract without fetching remote schemas.
 fn validators() -> BTreeMap<String, Validator> {
     schemas()
         .into_iter()
@@ -61,6 +70,7 @@ fn validators() -> BTreeMap<String, Validator> {
         .collect()
 }
 
+/// Reports every structural mismatch for these public synthetic values, never real export data.
 fn assert_valid(validator: &Validator, document: &Value, context: &str) {
     let errors: Vec<_> = validator
         .iter_errors(document)
@@ -69,11 +79,13 @@ fn assert_valid(validator: &Validator, document: &Value, context: &str) {
     assert!(errors.is_empty(), "{context}: {errors:#?}");
 }
 
+/// Checks what a typed deserialize/serialize cycle retains; it does not run engine semantic checks.
 fn round_trip<T: DeserializeOwned + Serialize>(document: &Value) -> Value {
     let typed: T = serde_json::from_value(document.clone()).unwrap();
     serde_json::to_value(typed).unwrap()
 }
 
+/// Routes a known fixture contract to its Rust type; an unknown name is a fixture-author error.
 fn typed_round_trip(schema: &str, document: &Value) -> Value {
     match schema {
         "canonical-record" => round_trip::<CanonicalRecord>(document),
@@ -85,6 +97,7 @@ fn typed_round_trip(schema: &str, document: &Value) -> Value {
     }
 }
 
+/// Loads valid synthetic vectors in filename order for deterministic test diagnostics.
 fn valid_vectors() -> Vec<(String, Value)> {
     let mut paths: Vec<_> = fs::read_dir(schema_dir().join("vectors/valid"))
         .unwrap()
@@ -103,6 +116,7 @@ fn valid_vectors() -> Vec<(String, Value)> {
         .collect()
 }
 
+/// Checks that each hand-authored contract is itself a valid Draft 2020-12 schema.
 #[test]
 fn schema_documents_are_valid_draft_2020_12() {
     for (name, schema) in schemas() {
@@ -114,6 +128,7 @@ fn schema_documents_are_valid_draft_2020_12() {
     }
 }
 
+/// Checks every valid vector against its schema before and after a lossless typed round trip.
 #[test]
 fn all_valid_vectors_round_trip_without_field_loss() {
     let validators = validators();
@@ -133,6 +148,7 @@ fn all_valid_vectors_round_trip_without_field_loss() {
     assert_eq!(covered.len(), SCHEMAS.len());
 }
 
+/// Applies each declared invalid mutation to a valid base and checks structural rejection.
 #[test]
 fn all_invalid_vectors_are_rejected() {
     let validators = validators();
@@ -181,6 +197,7 @@ fn all_invalid_vectors_are_rejected() {
     assert_eq!(covered.len(), SCHEMAS.len());
 }
 
+/// Removes each schema-required root field in turn; optional omissions belong in the minimal examples instead.
 #[test]
 fn removing_each_required_top_level_field_is_rejected() {
     let schemas = schemas();
@@ -199,6 +216,8 @@ fn removing_each_required_top_level_field_is_rejected() {
     }
 }
 
+/// Checks Rust-built minimal and populated records/reports for valid shape and serialization preservation.
+/// The populated record combines optional variants for coverage, not a coherent executable migration.
 #[test]
 fn rust_constructed_minimal_and_full_examples_match_schemas() {
     let validators = validators();
@@ -241,6 +260,7 @@ fn rust_constructed_minimal_and_full_examples_match_schemas() {
     }
 }
 
+/// Checks the currently enumerated disposition, verification, and verdict shapes, not their runtime enforcement.
 #[test]
 fn every_disposition_and_verification_variant_matches_schema() {
     let dispositions = [
@@ -351,6 +371,7 @@ fn every_disposition_and_verification_variant_matches_schema() {
     }
 }
 
+/// Checks that model/dimension metadata can round-trip without inventing absent vector or normalization data.
 #[test]
 fn embedding_metadata_only_round_trips_without_synthesizing_vectors() {
     let mut record = support::canonical_full();
