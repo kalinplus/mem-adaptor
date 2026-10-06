@@ -6,6 +6,7 @@
 | 你想做什么 | 读哪份 |
 |---|---|
 | 控制每轮 review 的阅读量与停止点 | [review-workflow.md](review-workflow.md) — 文件/函数意图说明、Issue/PR 交接、人工放行与当前补救建议 |
+| 规定失败处理与测试验收 | [testing-policy.md](testing-policy.md) — 失败分类、副作用与凭据断言、故障注入方法及现有覆盖边界 |
 | 改设计、加模块、动铁律 | [design.md](design.md) — 19 条设计决策（DEC-1~19），每条附「证据 → 理由 → 后果」 |
 | 先看整体长什么样 | [diagrams.md](diagrams.md) — 框架图、一次运行的流程图、家模式图、单条记录的处置状态（Mermaid 源 + [diagrams/](diagrams/) 下的 PNG） |
 | 开始写代码、知道先做什么 | [implementation-plan.md](implementation-plan.md) — 技术栈（Rust 核心 + Python conformance）、仓库布局、核心接口、D1 的 M0–M7 里程碑与验收项 |
@@ -30,6 +31,7 @@ AGENTS.md（协作规则 + 铁律 + 模块边界）
 design.md（设计决策 + 为什么，是推导）
     │
     ├── review-workflow.md        小功能交付、Issue/PR 状态与人工 review 停止规则
+    ├── testing-policy.md        失败行为与测试规范，不代表所有要求已实现
     ├── diagrams.md               design.md 的图示版，冲突时以 design.md 为准
     ├── implementation-plan.md    design.md 的落地计划：语言、布局、接口、里程碑
     │   ├── schema-v0-proposal.md 已确认、已实现的 M1 字段与命名
