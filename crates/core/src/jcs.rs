@@ -63,7 +63,9 @@ mod tests {
             json!(1e20),
         ] {
             let document = json!({"nested": [{"count": number}]});
-            assert!(to_vec(&document).is_err());
+            let message = to_vec(&document).unwrap_err().to_string();
+            assert_eq!(message, "JSON integer exceeds the JCS safe range");
+            assert!(!message.contains(&number.to_string()));
         }
         for number in [
             json!(9007199254740991_u64),

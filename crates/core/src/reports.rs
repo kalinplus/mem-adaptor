@@ -46,7 +46,7 @@ pub enum OmissionReason {
     DeletedInTarget,
     TargetUnsupported { field: String },
     VerdictExcluded { cluster_id: String },
-    SourceDeleted,
+    SourceMissing,
     SecretReferenceUnsupported,
 }
 
@@ -300,7 +300,8 @@ pub struct DigestRecord {
     pub predictions: Vec<Prediction>,
 }
 
-/// Defines the hashed execution basis, excluding presentation-only run IDs and timestamps.
+/// Defines the hashed execution basis, excluding current presentation-only run IDs and timestamps.
+/// A previous receipt's complete bytes remain bound because its carried history is an execution dependency.
 /// Source-manifest and report-entry consistency require additional engine checks, not just this hash.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -309,6 +310,9 @@ pub struct DigestInputs {
     pub targets: Vec<TargetSpec>,
     pub writers: Vec<WriterSpec>,
     pub gate_policy: GatePolicy,
+    /// Binds every fact carried from the exact loaded receipt, including records absent from this source round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_receipt_hash: Option<String>,
 }
 
 /// Records source-file hashes for change checks without copying the source bundle into the report.

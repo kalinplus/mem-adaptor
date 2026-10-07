@@ -155,7 +155,7 @@
         },
         {
           "type": "object", "additionalProperties": false, "required": ["code"],
-          "properties": {"code": {"enum": ["already_migrated", "deleted_in_target", "source_deleted", "secret_reference_unsupported"]}}
+          "properties": {"code": {"enum": ["already_migrated", "deleted_in_target", "source_missing", "secret_reference_unsupported"]}}
         },
         {
           "type": "object", "additionalProperties": false, "required": ["code", "field"],
@@ -273,6 +273,7 @@
     "digest_inputs": {
       "type": "object", "additionalProperties": false, "required": ["records", "targets", "writers", "gate_policy"],
       "properties": {
+        "previous_receipt_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash", "description": "Exact bytes of the complete loaded previous receipt, including carried history."},
         "records": {
           "type": "array", "items": {
             "type": "object", "additionalProperties": false, "required": ["canonical_id", "content_hash", "record_hash", "predictions"],

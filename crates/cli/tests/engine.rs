@@ -185,11 +185,14 @@ fn forged_identity_or_wrong_embedding_dimension_fails_before_writes() {
                 normalized: None,
             });
         }
-        assert!(
-            engine(&directory, vec![record])
-                .plan(&directory.path().join("source"), policy())
-                .is_err()
-        );
+        let error = engine(&directory, vec![record])
+            .plan(&directory.path().join("source"), policy())
+            .unwrap_err();
+        assert!(error.to_string().contains(if corrupt_identity {
+            "Reader canonical identity mismatch"
+        } else {
+            "Embedding vector length does not match dimension"
+        }));
         assert!(!directory.path().join("target").exists());
     }
 }
@@ -237,16 +240,16 @@ fn engine_exposes_reader_omissions_and_binds_metadata_to_approval() {
         backend: "local".into(),
         approver: "synthetic".into(),
     };
-    assert!(
-        changed_engine
-            .apply(
-                &first,
-                &approval,
-                "plan.json".into(),
-                "approval.json".into()
-            )
-            .is_err()
-    );
+    let error = changed_engine
+        .apply(
+            &first,
+            &approval,
+            "plan.json".into(),
+            "approval.json".into(),
+        )
+        .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("[S7]") && message.contains("Plan digest mismatch"));
     assert!(!directory.path().join("target").exists());
 }
 

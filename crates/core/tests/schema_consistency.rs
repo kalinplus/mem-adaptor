@@ -121,6 +121,53 @@ fn valid_vectors() -> Vec<(String, Value)> {
 
 // Schema validity: the contracts must be valid before their example values are tested.
 
+/// Accepts the complete-history hash and rejects malformed/null values without normalizing the execution basis.
+#[test]
+fn previous_receipt_hash_is_typed_and_schema_constrained() {
+    let validator = validators().remove("plan-report").unwrap();
+    let mut document = serde_json::to_value(support::plan()).unwrap();
+    let hash = format!("sha256:{}", "a".repeat(64));
+    document["digest_inputs"]["previous_receipt_hash"] = json!(hash);
+    assert_valid(&validator, &document, "complete receipt hash");
+    assert_eq!(typed_round_trip("plan-report", &document), document);
+    for invalid in [json!("not-a-hash"), json!(null), json!(4)] {
+        document["digest_inputs"]["previous_receipt_hash"] = invalid;
+        assert!(!validator.is_valid(&document));
+    }
+}
+
+/// Accepts truthful missing-source dispositions and rejects the unpublished, misleading deletion vocabulary.
+#[test]
+fn missing_source_vocabulary_matches_rust_and_schema() {
+    let validators = validators();
+    for (name, mut document) in [
+        ("plan-report", json!(support::plan_full())),
+        ("receipt-report", json!(support::receipt(true))),
+    ] {
+        document["entries"][0]["disposition"] =
+            json!({"status":"omitted","reason":{"code":"source_missing"}});
+        if name == "receipt-report" {
+            document["entries"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("verification");
+        }
+        assert_valid(&validators[name], &document, name);
+        assert_eq!(typed_round_trip(name, &document), document);
+        document["entries"][0]["disposition"]["reason"]["code"] = json!("source_deleted");
+        assert!(!validators[name].is_valid(&document));
+        let message = match name {
+            "plan-report" => serde_json::from_value::<PlanReport>(document)
+                .unwrap_err()
+                .to_string(),
+            _ => serde_json::from_value::<ReceiptReport>(document)
+                .unwrap_err()
+                .to_string(),
+        };
+        assert!(message.contains("unknown variant `source_deleted`"));
+    }
+}
+
 /// Checks that each hand-authored contract is itself a valid Draft 2020-12 schema.
 #[test]
 fn schema_documents_are_valid_draft_2020_12() {
@@ -320,7 +367,7 @@ fn every_disposition_and_verification_variant_matches_schema() {
             },
         },
         Disposition::Omitted {
-            reason: OmissionReason::SourceDeleted,
+            reason: OmissionReason::SourceMissing,
         },
         Disposition::Omitted {
             reason: OmissionReason::SecretReferenceUnsupported,
