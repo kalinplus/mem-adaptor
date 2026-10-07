@@ -69,7 +69,7 @@ Synthetic memory.
 
 1. `crates/core/src/canonical.rs`：模块说明与 `CanonicalRecord` 的必需/可选分组，不必逐字段读。
 2. `crates/core/src/reader.rs`：`record()` 建基础信息，`finish()` 保留未知元数据；
-   `crates/reader-markdown/src/lib.rs` 的 `read()` 把例子读成记录，不负责审批或写目标。
+   `crates/readers/markdown/src/lib.rs` 的 `read()` 把例子读成记录，不负责审批或写目标。
 3. `crates/core/tests/support/mod.rs`：`canonical()` 与 `canonical_full()` 展示缺失和携带可选信息。
 4. `crates/core/tests/schema_consistency.rs`：必需字段逐项删除测试、最小/完整样例测试、
    仅向量元数据的往返测试，说明实际断言的边界。

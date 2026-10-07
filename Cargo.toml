@@ -1,11 +1,11 @@
 [workspace]
 members = [
     "crates/core",
-    "crates/reader-markdown",
-    "crates/reader-chatgpt",
-    "crates/reader-claude",
-    "crates/writer-ump",
-    "crates/writer-okf",
+    "crates/readers/markdown",
+    "crates/readers/chatgpt",
+    "crates/readers/claude",
+    "crates/writers/ump",
+    "crates/writers/okf",
     "crates/cli",
 ]
 default-members = ["crates/cli"]
@@ -33,8 +33,8 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 regex = "1"
 toml = "1"
 mem-adaptor-core = { path = "crates/core" }
-mem-adaptor-reader-markdown = { path = "crates/reader-markdown" }
-mem-adaptor-reader-chatgpt = { path = "crates/reader-chatgpt" }
-mem-adaptor-reader-claude = { path = "crates/reader-claude" }
-mem-adaptor-writer-ump = { path = "crates/writer-ump" }
-mem-adaptor-writer-okf = { path = "crates/writer-okf" }
+mem-adaptor-reader-markdown = { path = "crates/readers/markdown" }
+mem-adaptor-reader-chatgpt = { path = "crates/readers/chatgpt" }
+mem-adaptor-reader-claude = { path = "crates/readers/claude" }
+mem-adaptor-writer-ump = { path = "crates/writers/ump" }
+mem-adaptor-writer-okf = { path = "crates/writers/okf" }

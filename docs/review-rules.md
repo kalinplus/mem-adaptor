@@ -55,10 +55,10 @@ M3 曾出现“只有正确用例、覆盖很小、全部通过但没测到关�
 | 路径 | 必查内容 |
 |---|---|
 | `crates/core/src/source.rs` | testing-policy A（源加载、ZIP、路径、读取失败） |
-| `crates/reader-*/src/**`、`crates/core/src/reader.rs` | testing-policy A 的解析行与 C 的字段保留行；对应 `docs/m4-reader-proposal.md` §1、§5 的约定；未知字段必须保留或列入未承载（铁律 6）；不按正文或文件名猜类别；解析错误不回显源值；只在本地执行（铁律 3） |
+| `crates/readers/*/src/**`、`crates/core/src/reader.rs` | testing-policy A 的解析行与 C 的字段保留行；对应 `docs/m4-reader-proposal.md` §1、§5 的约定；未知字段必须保留或列入未承载（铁律 6）；不按正文或文件名猜类别；解析错误不回显源值；只在本地执行（铁律 3） |
 | `crates/core/src/engine.rs`、`crates/core/src/governance.rs` | testing-policy B（审批、摘要、历史依据）与 D（写入、回读、回执） |
 | `crates/core/src/gate.rs`、`crates/core/rules/**` | testing-policy C 的密钥行；pass 策略允许原样写入，不能误写成“目标无敏感信息” |
-| `crates/writer-*/src/**`、`crates/core/src/writer.rs` | testing-policy D 与 C；embedding 无法承载时有重嵌入计划（铁律 5）；DNA 字段无法承载时显式报告（铁律 6）；不接管无关用户文件 |
+| `crates/writers/*/src/**`、`crates/core/src/writer.rs` | testing-policy D 与 C；embedding 无法承载时有重嵌入计划（铁律 5）；DNA 字段无法承载时显式报告（铁律 6）；不接管无关用户文件 |
 | `crates/core/src/reports.rs`、`schema/**` | 报告如实区分计划、写入、回读与保存；不新增未经确认的字段或错误码 |
 | `crates/cli/src/**` | 失败提示说明阶段、原因、目标状态与下一步；stdout/stderr 不泄露敏感值；未证明安全前不建议“重试即可” |
 | `crates/**/tests/**`、`crates/cli/tests/fixtures/**` | §2 全部规则；只用合成数据；测试说明与断言一致 |

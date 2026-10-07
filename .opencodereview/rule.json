@@ -15,7 +15,7 @@
       "merge_system_rule": true
     },
     {
-      "path": "crates/{reader-*/src/**,core/src/reader.rs}",
+      "path": "crates/{readers/*/src/**,core/src/reader.rs}",
       "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 table A parse rows and table C field-preservation rows, plus docs/m4-reader-proposal.md §1 and §5. Unknown fields must be preserved in source_extra or listed as unmapped (no silent decay). Never guess a kind from body text or file names. Parse errors must not echo source values. Everything runs locally; no model calls. Name the covering test for each rule or report it as uncovered.",
       "merge_system_rule": true
     },
@@ -30,7 +30,7 @@
       "merge_system_rule": true
     },
     {
-      "path": "crates/{writer-*/src/**,core/src/writer.rs}",
+      "path": "crates/{writers/*/src/**,core/src/writer.rs}",
       "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 tables D and C. Unsupported embeddings need a structured re-embed plan; DNA fields that cannot be carried must be reported. Never take over unrelated user files; damaged managed records are refused before writing.",
       "merge_system_rule": true
     },

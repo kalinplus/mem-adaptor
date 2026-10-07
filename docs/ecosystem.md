@@ -193,7 +193,7 @@ dependency"）。⇒ **我们若写 `*.ump.md`，必须用 JSON front-matter**�
 
 **M5 落地**：`writer-ump` 已实现 `records.ump.json` 数组 Writer，
 官方 schema/license 原样 vendored 自 commit `5defe7839dd09da255744c24b0166e600e8e56cd`，
-见 `crates/writer-ump/schema/README.md`。离线 schema 校验与 metadata 往返通过；
+见 `crates/writers/ump/schema/README.md`。离线 schema 校验与 metadata 往返通过；
 不实现签名、DID、UMP 服务端或 L1–L3。源创建时间缺失时明确使用目标迁移创建时刻，
 非空 `consent.redact` 无法处理则拒写，不仅在输出中抄字段。
 
