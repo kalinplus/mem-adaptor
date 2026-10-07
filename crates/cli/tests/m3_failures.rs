@@ -345,7 +345,7 @@ fn reader_claim_and_read_failures_return_ordinary_errors_without_writes() {
         let error = fault_engine(&directory, &faults)
             .plan(&directory.path().join("source"), policy())
             .unwrap_err();
-        assert!(error.to_string().contains(cause));
+        assert!(format!("{error:#}").contains(cause));
         if io {
             assert_eq!(
                 error.downcast_ref::<std::io::Error>().unwrap().kind(),

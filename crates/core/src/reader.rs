@@ -103,8 +103,19 @@ pub fn map(source: &mut SourceRecord, path: &str, canonical: &str) {
 }
 
 /// Applies the agreed explicit-kind protection rules without guessing a category from body text or filenames.
-/// Unknown or missing kinds mark the interpretation inferred; unknown present kinds remain reported as unmapped.
-pub fn classify(record: &mut CanonicalRecord, source: &mut SourceRecord, path: &str) {
+/// Unknown or missing kinds mark the interpretation inferred; damaged present kinds fail instead of losing protection.
+pub fn classify(
+    record: &mut CanonicalRecord,
+    source: &mut SourceRecord,
+    path: &str,
+) -> crate::Result<()> {
+    if let Some(value) = source.fields.pointer(path) {
+        anyhow::ensure!(
+            value.is_string(),
+            "Invalid protection category at {} {path}; fix the category to a string before planning",
+            crate::gate::mask(&source.source_locator)
+        );
+    }
     let kind = source
         .fields
         .pointer(path)
@@ -144,9 +155,10 @@ pub fn classify(record: &mut CanonicalRecord, source: &mut SourceRecord, path: &
             });
         }
     }
+    Ok(())
 }
 
-/// Converts RFC 3339 text or finite Unix seconds into a timestamp; unparseable values stay unavailable.
+/// Converts RFC 3339 text or decimal Unix seconds into a timestamp without binary floating-point multiplication.
 /// Does not invent a timezone for date-only text or decide whether the value is a record time or fact time.
 pub fn time(value: &Value) -> Option<String> {
     if let Some(text) = value.as_str() {
@@ -155,11 +167,21 @@ pub fn time(value: &Value) -> Option<String> {
             .format(&Rfc3339)
             .ok()
     } else {
-        let seconds = value.as_f64()?;
-        if !seconds.is_finite() {
-            return None;
-        }
-        OffsetDateTime::from_unix_timestamp_nanos((seconds * 1e9) as i128)
+        let decimal = value.as_number()?.to_string();
+        let (mantissa, exponent) = decimal
+            .split_once(['e', 'E'])
+            .map_or(Some((decimal.as_str(), 0)), |(mantissa, exponent)| {
+                Some((mantissa, exponent.parse::<i32>().ok()?))
+            })?;
+        let fraction = mantissa.split_once('.').map_or(0, |(_, tail)| tail.len());
+        let coefficient = mantissa.replace('.', "").parse::<i128>().ok()?;
+        let power = 9_i32.checked_add(exponent)?.checked_sub(fraction as i32)?;
+        let nanos = if power >= 0 {
+            coefficient.checked_mul(10_i128.checked_pow(power as u32)?)?
+        } else {
+            coefficient.checked_div(10_i128.checked_pow(power.unsigned_abs())?)?
+        };
+        OffsetDateTime::from_unix_timestamp_nanos(nanos)
             .ok()?
             .format(&Rfc3339)
             .ok()
@@ -273,7 +295,7 @@ pub fn anomaly(
 }
 
 /// Separates optional LF/CRLF frontmatter from an unchanged body without parsing or rewriting YAML.
-/// An opening delimiter without a closing delimiter is a parse error, not an ordinary body.
+/// An unclosed opening delimiter leaves the entire body intact; callers report the structural anomaly.
 pub fn markdown_document(text: &str) -> crate::Result<(Option<&str>, &str)> {
     let opening = if text.starts_with("---\r\n") {
         5
@@ -289,5 +311,20 @@ pub fn markdown_document(text: &str) -> crate::Result<(Option<&str>, &str)> {
         }
         offset += line.len();
     }
-    anyhow::bail!("Unclosed Markdown frontmatter")
+    Ok((None, text))
+}
+
+/// Parses closed metadata without exposing YAML values; empty/comment-only documents have no metadata.
+pub fn frontmatter(yaml: &str) -> crate::Result<Option<Value>> {
+    let value: Value =
+        serde_saphyr::from_str(yaml).map_err(|_| anyhow::anyhow!("Invalid YAML frontmatter"))?;
+    if value.is_null()
+        && yaml
+            .lines()
+            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
+    {
+        return Ok(None);
+    }
+    anyhow::ensure!(value.is_object(), "Markdown frontmatter must be an object");
+    Ok(Some(value))
 }

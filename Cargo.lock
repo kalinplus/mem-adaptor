@@ -586,6 +586,7 @@ dependencies = [
  "jsonschema",
  "regex",
  "serde",
+ "serde-saphyr",
  "serde_jcs",
  "serde_json",
  "sha2",
@@ -622,6 +623,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "mem-adaptor-core",
+ "regex",
  "serde-saphyr",
  "serde_json",
 ]

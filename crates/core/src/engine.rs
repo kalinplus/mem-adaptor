@@ -325,7 +325,13 @@ impl Engine {
                     InventoryStatus::Claimed
                 };
                 info!("[S2] parsing source file");
-                let output = reader.read(&claim, &source)?;
+                let output = reader.read(&claim, &source).with_context(|| {
+                    format!(
+                        "Source parsing failed [{}] at {}",
+                        reader.id(),
+                        crate::gate::mask(&claim.path)
+                    )
+                })?;
                 if claim.registered_only {
                     entry.registered_count = Some(output.registered_count);
                 }
