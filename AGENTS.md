@@ -7,6 +7,7 @@
 ## 协作规则（每轮必读）
 
 完整说明见 [docs/review-workflow.md](docs/review-workflow.md)。本节约束交付节奏，不改变下面的架构铁律。
+执行代码 review（含委派的 review agent）时，按 [docs/review-rules.md](docs/review-rules.md) 的路径规则与低价值测试规则审查。
 
 ### 代码意图说明
 
@@ -38,6 +39,7 @@
 
 - 方案批准只授权当前任务的实现。测试通过、AI review 通过、用户沉默和旧方案批准，都不能替代人工验收。
 - 交付前加载 `pr-delivery`，逐条核对 Issue 验收条件；交付草稿 PR，把 Issue 标为 `status:review`，更新交接与关联实现，提供文件 → 关键函数 → 测试的阅读顺序和真实验证结果。
+- 交付前按 [docs/review-rules.md](docs/review-rules.md) §4 用改动模式跑一遍 review agent，由主会话逐条判定后写进人工 review 包；合规表必须有“第 1 层 review”一行（发现数 / 真实数 / 处理方式），没跑就写“未运行”及原因，不能省略。
 - 交付动作完成后必须结束当前回复，等待用户 review；不得自动领取、探索或实现下一任务，也不得启动为下一任务工作的子 agent 或后台任务。
 - 用户要求修正只授权当前范围内的相应修正，修正并验证后再次交付等待；扩大范围或改变设计必须确认。
 - 合并或关闭需要用户确认。成功完成以 PR 合入并通过 `Closes #N` 关闭 Issue 为准；放弃关闭必须说明原因，不视为成功。
