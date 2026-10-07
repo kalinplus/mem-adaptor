@@ -8,6 +8,7 @@ use mem_adaptor_core::canonical::*;
 use mem_adaptor_core::engine::content_hash;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as normalize;
+use regex::Regex;
 use serde_json::{Value, json};
 
 pub struct MarkdownReader;
@@ -56,27 +57,39 @@ impl Reader for MarkdownReader {
     /// Restores OKF identity or derives a filesystem record; malformed fields and conflicting envelope metadata fail.
     /// Registration-only claims count links but emit no memory; this method does not write or approve migration.
     fn read(&self, claim: &Claim, source: &SourceFs) -> Result<ReaderOutput> {
+        self.read_claim(claim, source).with_context(|| {
+            format!(
+                "Markdown source at {}",
+                mem_adaptor_core::gate::mask(&claim.path)
+            )
+        })
+    }
+}
+
+impl MarkdownReader {
+    /// Parses document metadata and restores envelopes only after validating their object shape.
+    fn read_claim(&self, claim: &Claim, source: &SourceFs) -> Result<ReaderOutput> {
         let mut output = normalize::output();
-        let text = std::str::from_utf8(source.file(&claim.path))
-            .with_context(|| format!("Invalid UTF-8 source: {}", claim.path))?;
+        let text = std::str::from_utf8(source.file(&claim.path)).context("Invalid UTF-8 source")?;
         if claim.registered_only {
-            output.registered_count = text
-                .lines()
-                .filter(|line| line.trim_start().starts_with("- ["))
-                .count() as u64;
+            let link = Regex::new(r"^\s*-\s+\[[^\]]+\]\([^)]+\)").unwrap();
+            output.registered_count =
+                text.lines().filter(|line| link.is_match(line)).count() as u64;
             return Ok(output);
         }
         let (frontmatter, body) = normalize::markdown_document(text)?;
         let mut fields = json!({"body": body});
         if let Some(yaml) = frontmatter {
-            let value: Value = serde_saphyr::from_str(yaml)
-                .map_err(|_| anyhow::anyhow!("Invalid YAML frontmatter: {}", claim.path))?;
-            ensure!(value.is_object(), "Markdown frontmatter must be an object");
-            fields["frontmatter"] = value;
+            if let Some(value) = normalize::frontmatter(yaml)? {
+                fields["frontmatter"] = value;
+            }
+        } else if text.starts_with("---\n") || text.starts_with("---\r\n") {
+            normalize::anomaly(&mut output, &claim.path, "frontmatter_unclosed", "", None);
         }
         let mut record;
         if let Some(extension) = fields.pointer("/frontmatter/mem_adaptor") {
             // A home copy keeps the original source identity instead of creating a new identity from its target path.
+            ensure!(extension.is_object(), "OKF mem_adaptor must be an object");
             ensure!(
                 fields["frontmatter"]["type"] == "Memory",
                 "Unexpected OKF memory type"
@@ -180,14 +193,24 @@ impl Reader for MarkdownReader {
         } else {
             "/frontmatter/type"
         };
-        normalize::classify(&mut record, &mut original, kind_path);
+        normalize::classify(&mut record, &mut original, kind_path)?;
         if claude_code {
             record.scope = Scope::Project;
-            record.scope_qualifier = Some(format!(
-                "{}#{}",
-                source.root.display(),
-                claim.path.rsplit_once('/').map_or("", |(parent, _)| parent)
-            ));
+            let parent = claim.path.rsplit_once('/').map_or("", |(parent, _)| parent);
+            let components = parent.split('/').collect::<Vec<_>>();
+            let slug = components.windows(3).find_map(|parts| {
+                (parts[0] == "projects" && parts[2] == "memory").then_some(parts[1])
+            });
+            record.scope_qualifier = Some(slug.unwrap_or(parent).into());
+            if slug.is_none() {
+                normalize::anomaly(
+                    &mut output,
+                    &claim.path,
+                    "project_scope_relative_fallback",
+                    "/scope_qualifier",
+                    None,
+                );
+            }
             normalize::map(&mut original, "/frontmatter/metadata/node_type", "/source");
             if let Some(session) = original
                 .fields

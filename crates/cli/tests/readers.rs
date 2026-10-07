@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use mem_adaptor_core::canonical::*;
-use mem_adaptor_core::engine::{Engine, canonical_id, record_hash, timestamp};
+use mem_adaptor_core::engine::{Engine, record_hash, timestamp};
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
@@ -187,6 +187,10 @@ fn claude_code_retains_session_provenance_without_inventing_fact_time() {
     );
     assert!(record.observed_at.is_none());
     assert!(record.valid_from.is_none());
+    let without_time = &output[1].records[0];
+    assert!(without_time.updated_at.is_none());
+    assert!(without_time.observed_at.is_none());
+    assert!(without_time.valid_from.is_none());
     assert_eq!(
         record.provenance.evidence.as_ref().unwrap()[0].source_ref,
         "session:synthetic-session"
@@ -212,10 +216,7 @@ fn chatgpt_saved_memories_keep_ids_and_disabled_consent_and_count_deletions() {
         .iter()
         .find(|record| record.source_record_id == "synthetic-preference")
         .unwrap();
-    assert_eq!(
-        preference.canonical_id,
-        canonical_id("chatgpt", "synthetic-preference")
-    );
+    assert_eq!(preference.canonical_id, "eukvwdu6oeaekv3e53j47wqsvoqhagug");
     assert_eq!(preference.dna_class, DnaClass::Dna);
     assert_eq!(
         preference.created_at.as_deref(),
@@ -497,6 +498,17 @@ fn okf_indices_and_runtime_logs_are_registered_without_becoming_memories() {
     let claims = MarkdownReader.claim(&inventory);
     assert_eq!(claims.len(), 3);
     assert_eq!(
+        claims
+            .iter()
+            .map(|claim| (claim.path.as_str(), claim.registered_only))
+            .collect::<Vec<_>>(),
+        [
+            ("index.md", true),
+            ("log.md", true),
+            ("memories/note.md", false)
+        ]
+    );
+    assert_eq!(
         claims.iter().filter(|claim| claim.registered_only).count(),
         2
     );
@@ -639,11 +651,7 @@ fn conflicting_original_and_house_metadata_are_not_silently_merged() {
         Ok(_) => panic!("Metadata conflict was silently resolved"),
         Err(error) => error,
     };
-    assert!(
-        error
-            .to_string()
-            .contains("Conflicting original and envelope source metadata")
-    );
+    assert!(format!("{error:#}").contains("Conflicting original and envelope source metadata"));
     let extra = text.replacen("---\n", "---\ncustom_envelope:\n  enabled: true\n", 1);
     let recovered = read(&MarkdownReader, files(&[("memories/note.md", &extra)]));
     let fields = &recovered[0].records[0].source_extra.as_ref().unwrap()["frontmatter"];
@@ -685,11 +693,12 @@ fn metadata_only_changes_are_hashed_and_secret_metadata_cannot_bypass_the_gate()
         backend: "local".into(),
         approver: "synthetic".into(),
     };
-    assert!(
-        engine
-            .apply(&first, &approval, "plan".into(), "approval".into())
-            .is_err()
-    );
+    let error = engine
+        .apply(&first, &approval, "plan".into(), "approval".into())
+        .err()
+        .unwrap();
+    assert!(format!("{error:#}").contains("Plan digest mismatch: source or plan changed"));
+    assert!(!target.exists());
     let secret = format!("ghp_TEST{}", "A".repeat(32));
     fs::write(&path, format!("---\ntype: preference\ncustom:\n  credential: {secret}\n---\nSynthetic non-sensitive body.\n")).unwrap();
     let blocked = engine
@@ -744,6 +753,13 @@ fn malformed_export_boundaries_fail_without_echoing_sensitive_values() {
             Ok(_) => panic!("Malformed source was accepted"),
             Err(error) => error,
         };
+        let expected = match reader.id() {
+            "chatgpt" => "ChatGPT memory must be an array",
+            "claude" => "Claude project docs",
+            _ => "Invalid YAML frontmatter",
+        };
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+        assert!(format!("{error:#}").contains(name), "{error:#}");
         assert!(!format!("{error:#}").contains("synthetic-private-value"));
     }
     let conflict = read(
@@ -772,6 +788,28 @@ fn malformed_export_boundaries_fail_without_echoing_sensitive_values() {
 fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() {
     for name in ["markdown", "chatgpt", "claude"] {
         let directory = fixture(name);
+        let private = "fixture-metadata-private-value-for-output-check";
+        let path = directory.path().join("source").join(match name {
+            "markdown" => "note.md",
+            "chatgpt" => "memory.json",
+            _ => "projects.json",
+        });
+        let text = fs::read_to_string(&path).unwrap();
+        if name == "markdown" {
+            fs::write(
+                path,
+                text.replacen("---\n", &format!("---\nprivate_marker: {private}\n"), 1),
+            )
+            .unwrap();
+        } else {
+            let mut data: Value = serde_json::from_str(&text).unwrap();
+            if name == "chatgpt" {
+                data["memory"][0]["private_marker"] = json!(private);
+            } else {
+                data[0]["private_marker"] = json!(private);
+            }
+            fs::write(path, data.to_string()).unwrap();
+        }
         let target = format!("okf:{}", directory.path().join("target").display());
         let report_path = directory.path().join("plan.json");
         let result = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
@@ -790,7 +828,11 @@ fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() 
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
-        let value: Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        let bytes = fs::read(report_path).unwrap();
+        for stream in [&bytes, &result.stdout, &result.stderr] {
+            assert!(!String::from_utf8_lossy(stream).contains(private));
+        }
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
         let report: PlanReport = serde_json::from_value(value.clone()).unwrap();
         mem_adaptor_core::schema::validate("plan-report", &report).unwrap();
         assert!(

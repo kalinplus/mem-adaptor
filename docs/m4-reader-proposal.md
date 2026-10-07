@@ -21,6 +21,7 @@ M4 已完成合成验收，验收时 62 个测试、构建、格式和 Clippy �
 | 未知或缺失 | 不按正文猜类别 | standard |
 
 未知分类的 `evidence_level` 按既定计划标为 `inferred`，原类别不丢；
+类别字段存在但不是字符串时拒绝计划并提示修复，不按缺失类别处理，也不改用另一层类别掩盖损坏。
 分类明确的网页导出按第三方核对标为 `third_party`，不冒充真导出实测。
 读取已有 OKF 家时保留原有分类与证据等级，不重新猜测。
 Claude Code 的 `metadata.type=feedback` 不擅自升级成 DNA，列为未知分类，
@@ -82,24 +83,49 @@ M7 的真导出验收依赖用户提供或明确允许的真实数据，目前�
 
 - Prompt 文件使用 `*.chatgpt.md`，避免把 Gemini 的同形文本错归 ChatGPT；
   日期保留在 `source_extra.date`，不是事实时刻。重复的归一化行只保留一条并报异常。
+  去重覆盖本次同一源中的全部 Prompt 文件，代表按相对路径、行号排序确定；
+  日期/类别去除两侧空格，正文只在身份哈希中归一空白，代表原正文不改写。
 - saved-memory JSON 接受 `memory.json`、`saved_memories.json`、`memories.chatgpt.json`；
   `memories.json` 根据对象/条目形状与 Claude 的账号数组区分。
   原始字符串 id 原样保留；无 id 时采用正文哈希，内容变化会形成新记录。
+  `memory` 数组外的文件级未知 metadata 不塞进每条记录；使用现有 anomalies
+  按位置显式报告未承载（`uncarried_export_field`），包括空数组。
+  这不是全导出归档，外壳值不会写到目标或报告；逐条未知 metadata 仍走 `source_extra`。
 - Claude 新版记录以账号和原始文件路径组成稳定源标识；完整 `content` 字节不改，
   含 Markdown frontmatter 时只读取显式类别，不按 `/profile.md` 等文件名猜类别。
   项目文档优先保留原始 uuid，无 uuid 则按项目和文件名/正文哈希定位。
+  只有实际使用的字符串 uuid 列为 mapped，其他类型原值保留并接受安全整数校验。
+  `prompt_template` 和旧版 `conversations_memory` 缺失/空字符串不产生记录，
+  存在但非字符串则拒绝，不能先从其他记录 metadata 中删除后静默跳过。
+  新版 `memory_files` 的优先规则不变；旧版坏项目条目的异常包含具体转义后的项目位置。
 - 分类/保留规则列在 `field_map.rule`；未知类别保留原值并列 `unmapped`。
   未归一 metadata 同时列 `unmapped` 与 `/source_extra/...` 保留位置。
   原样字段与这些清单在内部按 `canonical_id` 关联，不同来源的同名原始 id 不能互相覆盖。
 - 根 `index.md` 带 OKF Index frontmatter 才连同 `log.md` 视为家索引/日志；
   `.mem-adaptor/` 下的运行产物不当记忆。正文提到 `okf_version` 不算家声明。
 - 空会话数组需同目录的来源证据；孤立 `conversations.json=[]` 不猜来源，列为未认领。
+  同目录指完全相同的父目录，不包括后代目录；全部 ChatGPT 文件别名及 Claude
+  仅 `project_memories` 的外壳都可提供来源证据。
+  独有文件名、可识别形状或同目录标记认出的 JSON 即使损坏仍被认领，然后普通失败，
+  不伪装为缺失；共享文件来源冲突仍拒绝，不自动选 Reader。
   已认领文件的错误 JSON/YAML 或外壳类型失败；坏条目/Prompt 坏行报告路径或行号，不复制原值。
   saved memory 同时给不同 `content` 与 `text` 时报告冲突，不自动选择全文。
+- Markdown 闭合的空/纯注释 frontmatter 视为无 metadata，正文保持原样；
+  未闭合开头 `---` 时全文作为正文并报 `frontmatter_unclosed`；
+  闭合坏 YAML、非对象 metadata 与非对象 `mem_adaptor` 普通失败，不 panic。
+  Reader 错误附脱敏文件/条目位置，不复制源值；CLI 继续说明写入前失败与下一步。
+- MEMORY.md 只计实际 Markdown 链接，不计任务 checkbox。Claude Code 的项目 scope
+  暂用 `projects/<slug>/memory` 的 slug；识别不到时用相对父目录并报
+  `project_scope_relative_fallback`。不再含绝对源根；卫星 ID/回执绑定仍属 #22 后续设计。
+- 数字 Unix 秒从十进制表示转换为纳秒，不乘二进制浮点数；无法解析的原时间保留为未知字段，
+  不补成事实时间。JSON 数字已失去的输入精度不能由 Reader 恢复。
 
 **验收产物**：
 
 - `crates/cli/tests/readers.rs`：16 项合成 Reader 验收。
+- `crates/cli/tests/reader_repairs.rs`、`chatgpt_repairs.rs`：输入拒错与字段处置的定向回归，
+  含混合好坏文件的目标快照/无成功计划、跨文件去重、外壳未承载、原生完整文件集合
+  与 metadata 密钥的 pass/block/allowlist。不是全部存活变异或真实导出的验收。
 - `crates/cli/tests/fixtures/m4/`：三个来源的输入与三个完整计划快照，全部合成。
 - 核心与引擎另外固定了逐条字段覆盖、跨来源原始 id 重名的回归。
 - 家往返比较完整 `record_hash`，不只比正文；ZIP 同样走审批后的真实临时写入。
