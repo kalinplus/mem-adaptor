@@ -6,7 +6,7 @@
 | 你想做什么 | 读哪份 |
 |---|---|
 | 控制每轮 review 的阅读量与停止点 | [review-workflow.md](review-workflow.md) — 文件/函数意图说明、Issue/PR 交接、人工 review 包与证据分类、人工放行与当前补救建议 |
-| 配置或执行自动 review | [review-rules.md](review-rules.md) — 路径规则、低价值测试写法、变异测试分类与各工具入口 |
+| 配置或执行自动 review | [review-rules.md](review-rules.md) — 路径规则、低价值测试写法、PR 与阶段 review 的执行方式、变异测试分类与各工具入口 |
 | 规定失败处理与测试验收 | [testing-policy.md](testing-policy.md) — 失败分类、副作用与凭据断言、故障注入方法及现有覆盖边界 |
 | 改设计、加模块、动铁律 | [design.md](design.md) — 19 条设计决策（DEC-1~19），每条附「证据 → 理由 → 后果」 |
 | 先看整体长什么样 | [diagrams.md](diagrams.md) — 框架图、一次运行的流程图、家模式图、单条记录的处置状态（Mermaid 源 + [diagrams/](diagrams/) 下的 PNG） |
