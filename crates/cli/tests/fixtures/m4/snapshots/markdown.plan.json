@@ -169,19 +169,24 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
         },
         {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
-        },
-        {
           "canonical_path": "",
           "target_path": "/frontmatter/mem_adaptor",
           "rule": "canonical_metadata_without_body_or_embedding_vector"
+        },
+        {
+          "canonical_path": "/tags",
+          "target_path": "/frontmatter/tags",
+          "rule": "tags_unchanged"
         }
       ],
       "unmapped": [
@@ -248,19 +253,24 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
               },
               {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
-              },
-              {
                 "canonical_path": "",
                 "target_path": "/frontmatter/mem_adaptor",
                 "rule": "canonical_metadata_without_body_or_embedding_vector"
+              },
+              {
+                "canonical_path": "/tags",
+                "target_path": "/frontmatter/tags",
+                "rule": "tags_unchanged"
               }
             ]
           }
@@ -344,5 +354,5 @@
       "user_selected": false
     }
   },
-  "plan_digest": "sha256:0af544d9fa4c31a4ea2bac62f361a50705cf2b3acfb1d768c0e7ad093398c129"
+  "plan_digest": "sha256:08aba43aa6a4969ae6de465f810fc8522d3bac9711f32498aaa46b81437322d2"
 }

@@ -1,12 +1,15 @@
-//! Writer for Open Knowledge Format Markdown homes.
+//! Writer for Open Knowledge Format Markdown homes, called after engine planning and explicit approval.
+//! Shares native projection and envelope parsing with the Reader; unowned files are never adopted.
+//! Writes individual approved files atomically, without cross-file transactions or cross-process locking.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use mem_adaptor_core::Result;
-use mem_adaptor_core::canonical::{ActorKind, CanonicalRecord, ReembedPlan};
+use mem_adaptor_core::canonical::{CanonicalRecord, ReembedPlan};
 use mem_adaptor_core::engine::{WriteToken, record_hash};
+use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
 use mem_adaptor_core::writer as target;
@@ -17,12 +20,20 @@ pub struct OkfWriter {
 }
 
 impl OkfWriter {
-    pub fn new(location: PathBuf) -> Self {
-        Self { location }
+    /// Normalizes accepted ancestor aliases once and rejects an explicitly symlinked target root.
+    pub fn new(location: PathBuf) -> Result<Self> {
+        Ok(Self {
+            location: target::normalize_root(&location)?,
+        })
     }
 
+    /// Preflights every valid-id candidate using the same managed-envelope classifier as direct inspection.
+    /// Ordinary Markdown remains unowned; unreadable candidates and corrupt managed records stop planning.
     fn managed_records(&self) -> Result<std::collections::BTreeMap<String, CanonicalRecord>> {
         let mut records = std::collections::BTreeMap::new();
+        if !target::directory_exists(&self.location.join("memories"))? {
+            return Ok(records);
+        }
         let entries = match fs::read_dir(self.location.join("memories")) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
@@ -36,42 +47,13 @@ impl OkfWriter {
             let Some(id) = name.strip_suffix(".md") else {
                 continue;
             };
-            if id.len() != 32
-                || !id
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
-            {
+            if !okf::valid_id(id) {
                 continue;
             }
-            let relative = format!("memories/{name}");
-            let bytes =
-                target::read_file(&self.location, &relative)?.context("Target file disappeared")?;
-            let text = std::str::from_utf8(&bytes).context("Invalid target Markdown encoding")?;
-            let Some(rest) = text.strip_prefix("---\n") else {
-                continue;
-            };
-            let yaml = rest.split_once("---\n").map_or(rest, |(yaml, _)| yaml);
-            if !yaml
-                .lines()
-                .any(|line| line.starts_with("mem_adaptor_envelope:"))
-            {
-                continue;
-            }
-            let metadata: Value = serde_saphyr::from_str(yaml)
-                .map_err(|_| anyhow::anyhow!("Invalid managed OKF YAML"))?;
-            ensure!(
-                metadata["mem_adaptor_envelope"] == "okf:0.2",
-                "Unsupported managed OKF envelope"
-            );
             let target_id = format!("memories/{id}");
-            let record = self
-                .inspect(&target_id)?
-                .context("Managed OKF record disappeared")?;
-            ensure!(
-                record.canonical_id == id,
-                "Managed OKF path identity mismatch"
-            );
-            records.insert(target_id, record);
+            if let Some(record) = self.inspect(&target_id)? {
+                records.insert(target_id, record);
+            }
         }
         Ok(records)
     }
@@ -105,7 +87,9 @@ impl Writer for OkfWriter {
         }
     }
 
-    fn plan(&self, record: &CanonicalRecord, _previous: Option<&ReceiptEntry>) -> Planned {
+    /// Projects vector loss explicitly and refuses unowned shared artifacts without swallowing filesystem errors.
+    /// Native mappings describe only fields present in this record's projected target.
+    fn plan(&self, record: &CanonicalRecord, _previous: Option<&ReceiptEntry>) -> Result<Planned> {
         let mut projected = record.clone();
         let mut disposition = Disposition::Accepted;
         if let Some(embedding) = &mut projected.embedding
@@ -130,15 +114,11 @@ impl Writer for OkfWriter {
             };
         }
         for (name, is_index) in [("index.md", true), ("log.md", false)] {
-            if let Ok(Some(bytes)) = target::read_file(&self.location, name) {
-                let managed = if is_index {
-                    std::str::from_utf8(&bytes).is_ok_and(|text| {
-                        text.starts_with(
-                            "---\ntype: Index\nokf_version: '0.2'\nmem_adaptor_index: true\n",
-                        )
-                    })
-                } else {
-                    bytes.starts_with(b"<!-- mem-adaptor managed migration log -->\n")
+            if let Some(bytes) = target::read_file(&self.location, name)? {
+                let managed = match std::str::from_utf8(&bytes) {
+                    Ok(text) if is_index => okf::owned_index(text)?,
+                    Ok(text) => okf::owned_log(text)?.is_some(),
+                    Err(_) => false,
                 };
                 if !managed {
                     disposition = Disposition::Unresolved {
@@ -147,38 +127,77 @@ impl Writer for OkfWriter {
                 }
             }
         }
-        Planned {
-            record: projected,
-            disposition,
-            target_id: format!("memories/{}", record.canonical_id),
-            previous_write: _previous.and_then(|entry| entry.prior_write.clone()),
-            duplicate_write: None,
-            target_map: vec![
-                target::mapping("/content", "/body", "body_bytes_unchanged"),
+        let native = okf::native_projection(&projected);
+        let mut target_map = vec![
+            target::mapping("/content", "/body", "body_bytes_unchanged"),
+            target::mapping(
+                "/content",
+                "/frontmatter/title",
+                "first_nonempty_line_80_unicode_characters",
+            ),
+            target::mapping(
+                "/source_record_id",
+                "/frontmatter/sources/0/id",
+                "source_record_id",
+            ),
+            target::mapping(
+                "/source_locator",
+                "/frontmatter/sources/0/resource",
+                "source_locator",
+            ),
+            target::mapping(
+                "",
+                "/frontmatter/mem_adaptor",
+                "canonical_metadata_without_body_or_embedding_vector",
+            ),
+        ];
+        if native["sources"][0].get("author").is_some() {
+            target_map.push(target::mapping(
+                "/provenance/actor",
+                "/frontmatter/sources/0/author",
+                "source_author_human_prefix_for_user",
+            ));
+        }
+        if projected.updated_at.is_some() {
+            target_map.push(target::mapping(
+                "/updated_at",
+                "/frontmatter/sources/0/last_modified",
+                "source_record_modified_time_not_fact_time",
+            ));
+        }
+        if native.get("generated").is_some() {
+            target_map.extend([
                 target::mapping(
-                    "/content",
-                    "/frontmatter/title",
-                    "first_nonempty_line_80_unicode_characters",
-                ),
-                target::mapping(
-                    "/source_locator",
-                    "/frontmatter/sources/0/resource",
-                    "source_locator",
+                    "/provenance/actor",
+                    "/frontmatter/generated/by",
+                    "source_author_human_prefix_for_user",
                 ),
                 target::mapping(
                     "/updated_at",
                     "/frontmatter/generated/at",
                     "source_record_modified_time_not_fact_time",
                 ),
-                target::mapping(
-                    "",
-                    "/frontmatter/mem_adaptor",
-                    "canonical_metadata_without_body_or_embedding_vector",
-                ),
-            ],
+            ]);
         }
+        if projected.tags.is_some() {
+            target_map.push(target::mapping(
+                "/tags",
+                "/frontmatter/tags",
+                "tags_unchanged",
+            ));
+        }
+        Ok(Planned {
+            record: projected,
+            disposition,
+            target_id: format!("memories/{}", record.canonical_id),
+            previous_write: _previous.and_then(|entry| entry.prior_write.clone()),
+            duplicate_write: None,
+            target_map,
+        })
     }
 
+    /// Rechecks approved bytes and ownership before any mutation, then persists records and native shared files.
+    /// Failure after the first persistence may leave partial output; no batch rollback or durability is promised.
     fn write(&self, batch: &[Planned], token: &WriteToken) -> Result<WriteResult> {
         token.authorize(self, batch)?;
         if batch.is_empty() {
@@ -188,6 +207,21 @@ impl Writer for OkfWriter {
         let old_log = target::read_file(&self.location, "log.md")?;
         token.authorize_artifact(self, "index.md", old_index.as_deref())?;
         token.authorize_artifact(self, "log.md", old_log.as_deref())?;
+        if let Some(bytes) = &old_index {
+            ensure!(
+                okf::owned_index(
+                    std::str::from_utf8(bytes).context("Invalid OKF index encoding")?
+                )?,
+                "Target index is not owned by this Writer"
+            );
+        }
+        let mut log_groups = match &old_log {
+            Some(bytes) => {
+                okf::owned_log(std::str::from_utf8(bytes).context("Invalid OKF log encoding")?)?
+                    .context("Target log is not owned by this Writer")?
+            }
+            None => std::collections::BTreeMap::new(),
+        };
         let mut managed = self.managed_records()?;
         for target_id in managed.keys() {
             let path = format!("{target_id}.md");
@@ -229,14 +263,7 @@ impl Writer for OkfWriter {
                     "Target payload changed after approval"
                 );
                 let text = std::str::from_utf8(previous_bytes.as_ref().unwrap())?;
-                let yaml = text
-                    .strip_prefix("---\n")
-                    .context("Missing OKF frontmatter")?
-                    .split_once("---\n")
-                    .context("Unclosed OKF frontmatter")?
-                    .0;
-                serde_saphyr::from_str::<Value>(yaml)
-                    .map_err(|_| anyhow::anyhow!("Invalid OKF YAML"))?
+                okf::managed_metadata(text)?.context("Missing managed OKF metadata")?
             } else {
                 ensure!(
                     previous_bytes.is_none(),
@@ -244,36 +271,15 @@ impl Writer for OkfWriter {
                 );
                 json!({})
             };
-            frontmatter["type"] = Value::String("Memory".into());
+            let native = okf::native_projection(&planned.record);
+            frontmatter["type"] = native["type"].clone();
             frontmatter["mem_adaptor_envelope"] = Value::String("okf:0.2".into());
-            frontmatter["title"] = Value::String(target::title(&planned.record));
-            let mut origin = json!({"id": planned.record.source_record_id, "resource": planned.record.source_locator});
-            if matches!(
-                planned.record.provenance.actor_kind,
-                ActorKind::User | ActorKind::Agent | ActorKind::Model
-            ) {
-                origin["author"] = Value::String(planned.record.provenance.actor.clone());
-            }
-            if let Some(modified) = &planned.record.updated_at {
-                origin["last_modified"] = Value::String(modified.clone());
-            }
-            frontmatter["sources"] = json!([origin]);
-            if let Some(tags) = &planned.record.tags {
-                frontmatter["tags"] = json!(tags);
-            } else {
-                frontmatter.as_object_mut().unwrap().remove("tags");
-            }
-            if let Some(modified) = &planned.record.updated_at {
-                let mut generated = json!({"at": modified});
-                if matches!(
-                    planned.record.provenance.actor_kind,
-                    ActorKind::User | ActorKind::Agent | ActorKind::Model
-                ) {
-                    generated["by"] = Value::String(planned.record.provenance.actor.clone());
+            for field in ["title", "sources", "tags", "generated"] {
+                if let Some(value) = native.get(field) {
+                    frontmatter[field] = value.clone();
+                } else {
+                    frontmatter.as_object_mut().unwrap().remove(field);
                 }
-                frontmatter["generated"] = generated;
-            } else {
-                frontmatter.as_object_mut().unwrap().remove("generated");
             }
             frontmatter["mem_adaptor"] = metadata;
             let yaml = serde_saphyr::to_string(&frontmatter)?;
@@ -311,9 +317,10 @@ impl Writer for OkfWriter {
                 .or_default()
                 .push(format!("- [{title}]({target_id}.md)\n"));
         }
-        let mut index =
-            "---\ntype: Index\nokf_version: '0.2'\nmem_adaptor_index: true\n---\n# Memory index\n"
-                .to_owned();
+        let mut index = format!(
+            "---\nokf_version: '0.2'\n---\n{}\n# Memory index\n",
+            okf::INDEX_MARKER
+        );
         for (scope, mut entries) in groups {
             entries.sort();
             index.push_str(&format!("\n## {}\n\n", scope.replace(['\r', '\n'], " ")));
@@ -328,29 +335,44 @@ impl Writer for OkfWriter {
             old_index.as_deref(),
         )?;
         artifacts.push(target::output_artifact("index.md", index.as_bytes()));
-        let mut log = old_log.clone().unwrap_or_else(|| {
-            b"<!-- mem-adaptor managed migration log -->\n# Migration log\n".to_vec()
-        });
         let updates = batch
             .iter()
             .filter(|planned| planned.previous_write.is_some())
             .count();
-        let systems: std::collections::BTreeSet<_> = batch
-            .iter()
-            .map(|planned| planned.record.source.system.as_str())
-            .collect();
-        log.extend_from_slice(
-            format!(
-                "\n- {}: source={}, added={}, updated={}, removed=0.\n",
-                mem_adaptor_core::engine::timestamp()?,
-                systems.into_iter().collect::<Vec<_>>().join(","),
-                batch.len() - updates,
-                updates
-            )
-            .as_bytes(),
+        let timestamp = mem_adaptor_core::engine::timestamp()?;
+        let (date, time) = timestamp
+            .split_once('T')
+            .context("Invalid migration timestamp")?;
+        // The clock describes this migration event, never the creation or modification of a source fact.
+        let clock = format!("{}Z", time.trim_end_matches('Z').split('.').next().unwrap());
+        let group = log_groups.entry(date.into()).or_default();
+        let mut event = format!(
+            "- [{clock}] mem-adaptor: +{} ~{updates}\n",
+            batch.len() - updates
         );
-        target::atomic_file(&self.location, "log.md", &log, old_log.as_deref())?;
-        artifacts.push(target::output_artifact("log.md", &log));
+        // Keep the previous body contiguous and separate its first paragraph from the new Markdown list item.
+        if group.first().is_some_and(|line| !line.trim().is_empty()) {
+            event.push('\n');
+        }
+        group.insert(0, event);
+        let mut log = format!("{}\n# Directory Update Log\n", okf::LOG_MARKER);
+        for (date, entries) in log_groups.into_iter().rev() {
+            if !log.ends_with('\n') {
+                log.push('\n');
+            }
+            if !log.ends_with("\n\n") {
+                log.push('\n');
+            }
+            log.push_str(&format!("## {date}\n"));
+            if entries.first().is_some_and(|line| !line.trim().is_empty()) {
+                log.push('\n');
+            }
+            for entry in entries {
+                log.push_str(&entry);
+            }
+        }
+        target::atomic_file(&self.location, "log.md", log.as_bytes(), old_log.as_deref())?;
+        artifacts.push(target::output_artifact("log.md", log.as_bytes()));
         Ok(WriteResult { written, artifacts })
     }
 
@@ -369,52 +391,27 @@ impl Writer for OkfWriter {
             .collect()
     }
 
+    /// Reads a safe regular-file candidate, distinguishing unowned Markdown from corrupt managed envelopes.
+    /// Managed records must retain source/filename identity and the same native provenance consistency as the Reader.
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>> {
         let id = target_id
             .strip_prefix("memories/")
             .context("Invalid OKF target id")?;
-        ensure!(
-            id.len() == 32
-                && id
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)),
-            "Invalid OKF target id"
-        );
-        let path = self.location.join(format!("{target_id}.md"));
-        if self.location.join("memories").exists() {
-            ensure!(
-                !fs::symlink_metadata(self.location.join("memories"))?
-                    .file_type()
-                    .is_symlink(),
-                "Target memories directory must not be a symlink"
-            );
-        }
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        ensure!(okf::valid_id(id), "Invalid OKF target id");
+        let Some(bytes) = target::read_file(&self.location, &format!("{target_id}.md"))? else {
+            return Ok(None);
         };
+        let text = std::str::from_utf8(&bytes).context("Invalid target Markdown encoding")?;
+        let Some(metadata) = okf::managed_metadata(text)? else {
+            return Ok(None);
+        };
+        let (_, body) = mem_adaptor_core::reader::markdown_document(text)?;
+        let record = okf::restore(&metadata, body)?;
+        okf::validate_projection(&metadata, &record)?;
         ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
-            "Target record must be a regular file"
+            record.canonical_id == id,
+            "Managed OKF path identity mismatch"
         );
-        let text = fs::read_to_string(&path)?;
-        let rest = text
-            .strip_prefix("---\n")
-            .context("Missing OKF frontmatter")?;
-        let (yaml, body) = rest
-            .split_once("---\n")
-            .context("Unclosed OKF frontmatter")?;
-        let mut metadata: Value = serde_saphyr::from_str(yaml)
-            .map_err(|_| anyhow::anyhow!("Invalid OKF YAML on read-back"))?;
-        ensure!(metadata["type"] == "Memory", "Unexpected OKF type");
-        let extension = metadata["mem_adaptor"]
-            .as_object_mut()
-            .context("Missing OKF metadata extension")?;
-        extension.insert("content".into(), Value::String(body.into()));
-        let record: CanonicalRecord = serde_json::from_value(metadata["mem_adaptor"].clone())
-            .map_err(|_| anyhow::anyhow!("Invalid OKF record fields"))?;
-        mem_adaptor_core::schema::validate("canonical-record", &record)?;
         Ok(Some(record))
     }
 

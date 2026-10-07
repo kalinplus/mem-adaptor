@@ -1,4 +1,6 @@
-<!-- mem-adaptor managed migration log -->
-# Migration log
+<!-- mem-adaptor:okf-log:v1 -->
+# Directory Update Log
 
-- 2026-01-02T03:04:05Z: source=markdown, added=1, updated=0, removed=0.
+## 2026-01-02
+
+- [03:04:05Z] mem-adaptor: +1 ~0

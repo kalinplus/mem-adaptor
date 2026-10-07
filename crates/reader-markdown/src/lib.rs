@@ -2,10 +2,11 @@
 //! Converts claimed source files into paired canonical/original records before the engine validates and plans.
 //! Preserves body text and unknown metadata; indices are registration-only, with no extraction model or target writes.
 
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::*;
 use mem_adaptor_core::engine::content_hash;
+use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as normalize;
 use regex::Regex;
@@ -24,15 +25,12 @@ impl Reader for MarkdownReader {
     }
 
     /// Claims Markdown except runtime artifacts and ChatGPT Prompt files reserved for another adapter.
-    /// Marks MEMORY.md and recognized OKF root index/log files registration-only without converting their text.
+    /// Marks MEMORY.md and version-only native OKF root index/log files registration-only without requiring ownership.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
         let home = inventory.get("index.md").is_some_and(|bytes| {
             std::str::from_utf8(bytes)
                 .ok()
-                .and_then(|text| normalize::markdown_document(text).ok())
-                .and_then(|(yaml, _)| yaml)
-                .and_then(|yaml| serde_saphyr::from_str::<Value>(yaml).ok())
-                .is_some_and(|value| value["type"] == "Index" && value.get("okf_version").is_some())
+                .is_some_and(|text| okf::native_index(text).unwrap_or(false))
         });
         inventory
             .keys()
@@ -67,7 +65,8 @@ impl Reader for MarkdownReader {
 }
 
 impl MarkdownReader {
-    /// Parses document metadata and restores envelopes only after validating their object shape.
+    /// Parses shared standalone delimiters and restores only validated managed envelopes with original source identity.
+    /// Native fields use the Writer's projection rules; ordinary source metadata retains existing normalization.
     fn read_claim(&self, claim: &Claim, source: &SourceFs) -> Result<ReaderOutput> {
         let mut output = normalize::output();
         let text = std::str::from_utf8(source.file(&claim.path)).context("Invalid UTF-8 source")?;
@@ -77,6 +76,7 @@ impl MarkdownReader {
                 text.lines().filter(|line| link.is_match(line)).count() as u64;
             return Ok(output);
         }
+        let managed = okf::managed_metadata(text)?;
         let (frontmatter, body) = normalize::markdown_document(text)?;
         let mut fields = json!({"body": body});
         if let Some(yaml) = frontmatter {
@@ -87,17 +87,10 @@ impl MarkdownReader {
             normalize::anomaly(&mut output, &claim.path, "frontmatter_unclosed", "", None);
         }
         let mut record;
-        if let Some(extension) = fields.pointer("/frontmatter/mem_adaptor") {
+        if let Some(metadata) = managed {
             // A home copy keeps the original source identity instead of creating a new identity from its target path.
-            ensure!(extension.is_object(), "OKF mem_adaptor must be an object");
-            ensure!(
-                fields["frontmatter"]["type"] == "Memory",
-                "Unexpected OKF memory type"
-            );
-            let mut extension = extension.clone();
-            extension["content"] = Value::String(body.into());
-            record = serde_json::from_value::<CanonicalRecord>(extension)
-                .map_err(|_| anyhow::anyhow!("Invalid OKF memory fields"))?;
+            record = okf::restore(&metadata, body)?;
+            okf::validate_projection(&metadata, &record)?;
             if record.content_hash != content_hash(body.as_bytes()) {
                 normalize::anomaly(&mut output, &claim.path, "okf_body_changed", "/body", None);
                 record.content_hash = content_hash(body.as_bytes());
@@ -106,60 +99,28 @@ impl MarkdownReader {
             normalize::map(&mut original, "/body", "/content");
             normalize::map(&mut original, "/frontmatter/mem_adaptor", "");
             normalize::map(&mut original, "/frontmatter/type", "/source");
-            if original
-                .fields
-                .pointer("/frontmatter/mem_adaptor_envelope")
-                .and_then(Value::as_str)
-                == Some("okf:0.2")
-            {
-                normalize::map(
-                    &mut original,
-                    "/frontmatter/mem_adaptor_envelope",
-                    "/source",
-                );
-                if original
-                    .fields
-                    .pointer("/frontmatter/title")
-                    .and_then(Value::as_str)
-                    == Some(mem_adaptor_core::writer::title(&record).as_str())
-                {
-                    normalize::map(&mut original, "/frontmatter/title", "/content");
-                }
-                let authored = matches!(
-                    record.provenance.actor_kind,
-                    ActorKind::User | ActorKind::Agent | ActorKind::Model
-                );
-                let mut origin =
-                    json!({"id": record.source_record_id, "resource": record.source_locator});
-                if authored {
-                    origin["author"] = Value::String(record.provenance.actor.clone());
-                }
-                if let Some(modified) = &record.updated_at {
-                    origin["last_modified"] = Value::String(modified.clone());
-                }
-                let generated = record.updated_at.as_ref().map(|modified| {
-                    let mut value = json!({"at": modified});
-                    if authored {
-                        value["by"] = Value::String(record.provenance.actor.clone());
-                    }
-                    value
-                });
-                for (field, expected, canonical) in [
-                    ("sources", Some(json!([origin])), "/provenance"),
-                    ("generated", generated, "/updated_at"),
-                    (
-                        "tags",
-                        record.tags.as_ref().map(|tags| json!(tags)),
-                        "/tags",
-                    ),
-                ] {
-                    ensure!(
-                        original.fields["frontmatter"].get(field) == expected.as_ref(),
-                        "OKF native projection differs from canonical metadata"
+            normalize::map(
+                &mut original,
+                "/frontmatter/mem_adaptor_envelope",
+                "/source",
+            );
+            let native = okf::native_projection(&record);
+            if metadata.get("title") == native.get("title") {
+                normalize::map(&mut original, "/frontmatter/title", "/content");
+            }
+            // Coverage keeps arrays atomic; this validated projection spans identity, provenance, locator and time.
+            normalize::map(&mut original, "/frontmatter/sources", "");
+            for (source_path, canonical_path) in [
+                ("/generated/by", "/provenance/actor"),
+                ("/generated/at", "/updated_at"),
+                ("/tags", "/tags"),
+            ] {
+                if native.pointer(source_path).is_some() {
+                    normalize::map(
+                        &mut original,
+                        &format!("/frontmatter{source_path}"),
+                        canonical_path,
                     );
-                    if expected.is_some() {
-                        normalize::map(&mut original, &format!("/frontmatter/{field}"), canonical);
-                    }
                 }
             }
             normalize::finish(&mut output, record, original)?;

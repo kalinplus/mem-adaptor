@@ -307,7 +307,7 @@ fn fault_engine(directory: &TempDir, faults: &[Fault]) -> Engine {
     registry
         .register_writer(
             "home".into(),
-            OkfWriter::new(directory.path().join("target")),
+            OkfWriter::new(directory.path().join("target")).unwrap(),
         )
         .unwrap();
     Engine { registry }
@@ -515,7 +515,7 @@ fn invalid_previous_receipts_refuse_without_target_or_credential_changes() {
             .register_reader(mem_adaptor_reader_markdown::MarkdownReader)
             .unwrap();
         registry
-            .register_writer("home".into(), OkfWriter::new(root.join("target")))
+            .register_writer("home".into(), OkfWriter::new(root.join("target")).unwrap())
             .unwrap();
         let error = Engine { registry }
             .plan_with_previous(&root.join("source"), policy(), Some(&previous))
@@ -621,7 +621,7 @@ fn final_receipt_failure_reports_already_changed_target_without_success() {
         .register_reader(mem_adaptor_reader_markdown::MarkdownReader)
         .unwrap();
     registry
-        .register_writer("home".into(), OkfWriter::new(root.join("target")))
+        .register_writer("home".into(), OkfWriter::new(root.join("target")).unwrap())
         .unwrap();
     let next = Engine { registry }
         .plan(&root.join("source"), policy())

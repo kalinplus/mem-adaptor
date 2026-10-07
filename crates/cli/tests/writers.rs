@@ -1,3 +1,6 @@
+//! Tests synthetic native Writer outputs, historical protection, and approved byte proofs.
+//! Native snapshots check semantics separately from adapter round-trips; no real memories or model calls.
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -71,16 +74,17 @@ fn fixture() -> TempDir {
     directory
 }
 
+/// Registers one synthetic record and a normalized physical target for the chosen Writer.
 fn engine(directory: &TempDir, record: CanonicalRecord, writer: &str) -> Engine {
     let mut registry = Registry::default();
     registry.register_reader(SyntheticReader(record)).unwrap();
     let path = directory.path().join("target");
     match writer {
         "okf" => registry
-            .register_writer("home".into(), OkfWriter::new(path))
+            .register_writer("home".into(), OkfWriter::new(path).unwrap())
             .unwrap(),
         "ump" => registry
-            .register_writer("home".into(), UmpWriter::new(path))
+            .register_writer("home".into(), UmpWriter::new(path).unwrap())
             .unwrap(),
         _ => unreachable!(),
     }
@@ -123,6 +127,32 @@ fn previous(directory: &TempDir, receipt: &ReceiptReport) -> std::path::PathBuf 
 fn ump(directory: &TempDir) -> Vec<Value> {
     serde_json::from_slice(&fs::read(directory.path().join("target/records.ump.json")).unwrap())
         .unwrap()
+}
+
+/// Captures the complete regular-file set and bytes for fault tests without following links.
+fn target_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        if !directory.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert!(!metadata.file_type().is_symlink());
+            if metadata.is_dir() {
+                directories.push(path);
+            } else {
+                assert!(metadata.is_file());
+                files.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    files
 }
 
 #[test]
@@ -210,6 +240,7 @@ fn kind_and_unicode_title_rules_are_deterministic_and_do_not_summarize() {
     );
 }
 
+/// Checks native envelope semantics independently and restores original canonical metadata through the Reader.
 #[test]
 fn okf_native_fields_index_and_log_are_honest_and_round_trip() {
     let directory = fixture();
@@ -223,16 +254,24 @@ fn okf_native_fields_index_and_log_are_honest_and_round_trip() {
     let frontmatter: Value = serde_saphyr::from_str(frontmatter.unwrap()).unwrap();
     assert_eq!(frontmatter["title"], "合成标题");
     assert_eq!(frontmatter["sources"][0]["resource"], "synthetic.json");
-    assert_eq!(frontmatter["generated"]["at"], "2026-01-02T03:04:05Z");
-    assert!(frontmatter["generated"].get("by").is_none());
+    assert!(frontmatter.get("generated").is_none());
+    assert_eq!(
+        frontmatter["sources"][0]["last_modified"],
+        "2026-01-02T03:04:05Z"
+    );
     assert!(frontmatter.get("description").is_none());
     assert!(frontmatter.get("verified").is_none());
     assert_eq!(body, original.content);
     let index = fs::read_to_string(directory.path().join("target/index.md")).unwrap();
+    let (index_metadata, _) = normalize::markdown_document(&index).unwrap();
+    assert_eq!(
+        serde_saphyr::from_str::<Value>(index_metadata.unwrap()).unwrap(),
+        json!({"okf_version": "0.2"})
+    );
     assert!(index.contains("## project: synthetic-project"));
     assert!(index.contains(&format!("[合成标题]({target_id}.md)")));
     let log = fs::read_to_string(directory.path().join("target/log.md")).unwrap();
-    assert!(log.contains("source=synthetic-writer, added=1, updated=0"));
+    assert!(log.contains("+1 ~0"));
     let source = SourceFs {
         root: directory.path().join("target"),
         files: [(format!("{target_id}.md"), text.into_bytes())]
@@ -394,6 +433,7 @@ fn native_fields_changed_without_canonical_changes_block_history_updates() {
     }
 }
 
+/// Refuses changed shared approval inputs before invoking writes and preserves all injected target bytes.
 #[test]
 fn shared_artifact_changes_after_approval_fail_before_any_record_write() {
     for writer in ["okf", "ump"] {
@@ -407,15 +447,6 @@ fn shared_artifact_changes_after_approval_fail_before_any_record_write() {
         changed.content_hash = content_hash(changed.content.as_bytes());
         let engine = engine(&directory, changed, writer);
         let approved = plan(&engine, &directory, Some(&previous));
-        let before_record = fs::read(if writer == "okf" {
-            directory.path().join(format!(
-                "target/{}.md",
-                receipt.entries[0].target_id.as_ref().unwrap()
-            ))
-        } else {
-            directory.path().join("target/records.ump.json")
-        })
-        .unwrap();
         let path = directory.path().join(if writer == "okf" {
             "target/index.md"
         } else {
@@ -424,17 +455,14 @@ fn shared_artifact_changes_after_approval_fail_before_any_record_write() {
         let mut bytes = fs::read(&path).unwrap();
         bytes.extend_from_slice(b"\n ");
         fs::write(&path, bytes).unwrap();
-        assert!(apply(&engine, &approved).is_err());
-        if writer == "okf" {
-            assert_eq!(
-                fs::read(directory.path().join(format!(
-                    "target/{}.md",
-                    receipt.entries[0].target_id.as_ref().unwrap()
-                )))
-                .unwrap(),
-                before_record
-            );
-        }
+        let before = target_snapshot(&directory.path().join("target"));
+        let history = fs::read(&previous).unwrap();
+        let error = apply(&engine, &approved).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("[S7]"), "{message}");
+        assert!(message.contains("digest mismatch"), "{message}");
+        assert_eq!(target_snapshot(&directory.path().join("target")), before);
+        assert_eq!(fs::read(&previous).unwrap(), history);
     }
 }
 
@@ -572,6 +600,7 @@ fn source_created_time_and_embedding_vectors_round_trip_through_ump() {
     );
 }
 
+/// Checks reviewed native bytes; only the log's migration date/time and UMP migration time are normalized.
 #[test]
 fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/m5");
@@ -588,11 +617,11 @@ fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
         let target = directory.path().join("target");
         if writer == "okf" {
             registry
-                .register_writer("home".into(), OkfWriter::new(target.clone()))
+                .register_writer("home".into(), OkfWriter::new(target.clone()).unwrap())
                 .unwrap();
         } else {
             registry
-                .register_writer("home".into(), UmpWriter::new(target.clone()))
+                .register_writer("home".into(), UmpWriter::new(target.clone()).unwrap())
                 .unwrap();
         }
         let engine = Engine { registry };
@@ -614,9 +643,11 @@ fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
             let normalized = log
                 .lines()
                 .map(|line| {
-                    if let Some(entry) = line.strip_prefix("- ") {
-                        let (_, description) = entry.split_once(": source=").unwrap();
-                        format!("- 2026-01-02T03:04:05Z: source={description}")
+                    if line.starts_with("## ") {
+                        "## 2026-01-02".into()
+                    } else if let Some(entry) = line.strip_prefix("- [") {
+                        let (_, description) = entry.split_once("] ").unwrap();
+                        format!("- [03:04:05Z] {description}")
                     } else {
                         line.to_owned()
                     }
@@ -640,6 +671,7 @@ fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
     }
 }
 
+/// Preserves semantically valid native user edits as target_modified before any further migration.
 #[test]
 fn native_creation_and_log_edits_before_planning_are_never_overwritten() {
     for writer in ["okf", "ump"] {
@@ -655,7 +687,7 @@ fn native_creation_and_log_edits_before_planning_are_never_overwritten() {
         });
         if writer == "okf" {
             let text = fs::read_to_string(&path).unwrap();
-            fs::write(&path, format!("{text}\nUser note.\n")).unwrap();
+            fs::write(&path, format!("{text}\n- User note.\n")).unwrap();
         } else {
             let mut native = ump(&directory);
             native[0]["time"]["created"] = json!("2026-03-01T00:00:00Z");
@@ -678,10 +710,14 @@ fn native_creation_and_log_edits_before_planning_are_never_overwritten() {
     }
 }
 
+/// Rejects edited managed native fields without modifying source input or creating target artifacts.
 #[test]
 fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
     let directory = fixture();
-    let engine = engine(&directory, record(), "okf");
+    let mut original = record();
+    original.provenance.actor_kind = ActorKind::User;
+    original.provenance.actor = "Synthetic author".into();
+    let engine = engine(&directory, original, "okf");
     let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
     let path = format!("{}.md", receipt.entries[0].target_id.as_ref().unwrap());
     let text = fs::read_to_string(directory.path().join("target").join(&path)).unwrap();
@@ -702,11 +738,19 @@ fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
             root: "/synthetic".into(),
             files: [(path.clone(), edited.into_bytes())].into_iter().collect(),
         };
+        let before = target_snapshot(&directory.path().join("target"));
+        let input = source.files.clone();
+        let error = match MarkdownReader.read(&MarkdownReader.claim(&source.files)[0], &source) {
+            Err(error) => error,
+            Ok(_) => panic!("Edited native projection was imported"),
+        };
         assert!(
-            MarkdownReader
-                .read(&MarkdownReader.claim(&source.files)[0], &source)
-                .is_err()
+            format!("{error:#}").contains("OKF native projection differs from canonical metadata")
         );
+        assert_eq!(source.files, input);
+        assert_eq!(target_snapshot(&directory.path().join("target")), before);
+        assert!(!directory.path().join("plan.approval.json").exists());
+        assert!(!directory.path().join("plan.receipt.json").exists());
     }
 }
 
@@ -753,6 +797,7 @@ fn unrelated_target_records_survive_and_unrelated_markdown_is_not_indexed() {
     }
 }
 
+/// Injects changes around actual approved writes and verifies byte-proof refusals with the observed target state.
 #[test]
 fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_back() {
     struct RacingWriter(Box<dyn Writer>, u8);
@@ -778,7 +823,12 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
         fn capabilities(&self) -> Capabilities {
             self.0.capabilities()
         }
-        fn plan(&self, record: &CanonicalRecord, previous: Option<&ReceiptEntry>) -> Planned {
+        /// Preserves the wrapped Writer's target inspection errors during fault injection.
+        fn plan(
+            &self,
+            record: &CanonicalRecord,
+            previous: Option<&ReceiptEntry>,
+        ) -> mem_adaptor_core::Result<Planned> {
             self.0.plan(record, previous)
         }
         fn write(
@@ -829,9 +879,9 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
             registry.register_reader(SyntheticReader(changed)).unwrap();
             let target = directory.path().join("target");
             let inner: Box<dyn Writer> = if writer == "okf" {
-                Box::new(OkfWriter::new(target))
+                Box::new(OkfWriter::new(target).unwrap())
             } else {
-                Box::new(UmpWriter::new(target))
+                Box::new(UmpWriter::new(target).unwrap())
             };
             registry
                 .register_writer("home".into(), RacingWriter(inner, stage))
@@ -842,7 +892,7 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
                 Err(error) => error,
                 Ok(_) => panic!("Raced target was overwritten"),
             };
-            assert!(error.to_string().contains(if stage == 0 {
+            assert!(format!("{error:#}").contains(if stage == 0 {
                 "WriteToken target artifact differs from approval"
             } else {
                 "Writer output changed before"

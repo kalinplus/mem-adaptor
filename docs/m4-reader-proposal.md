@@ -101,8 +101,10 @@ M7 的真导出验收依赖用户提供或明确允许的真实数据，目前�
 - 分类/保留规则列在 `field_map.rule`；未知类别保留原值并列 `unmapped`。
   未归一 metadata 同时列 `unmapped` 与 `/source_extra/...` 保留位置。
   原样字段与这些清单在内部按 `canonical_id` 关联，不同来源的同名原始 id 不能互相覆盖。
-- 根 `index.md` 带 OKF Index frontmatter 才连同 `log.md` 视为家索引/日志；
+- 根 `index.md` 的 frontmatter 只有受支持的 `okf_version` 才连同 `log.md` 视为家索引/日志；
   `.mem-adaptor/` 下的运行产物不当记忆。正文提到 `okf_version` 不算家声明。
+  Writer 的管理标记放在索引正文，Reader 的登记不授予 Writer 覆盖权限。
+  旧的未发布 `type: Index`/私有 frontmatter 不再作为家声明。
 - 空会话数组需同目录的来源证据；孤立 `conversations.json=[]` 不猜来源，列为未认领。
   同目录指完全相同的父目录，不包括后代目录；全部 ChatGPT 文件别名及 Claude
   仅 `project_memories` 的外壳都可提供来源证据。
@@ -130,5 +132,7 @@ M7 的真导出验收依赖用户提供或明确允许的真实数据，目前�
 - 核心与引擎另外固定了逐条字段覆盖、跨来源原始 id 重名的回归。
 - 家往返比较完整 `record_hash`，不只比正文；ZIP 同样走审批后的真实临时写入。
 - 原源 metadata 与家信封的同名叶子值冲突时失败，不自动覆盖；无冲突新增信封字段保留。
+- OKF 原生来源、作者与修改时间投影同 Writer 共用规则；人类前缀只影响原生表示，
+  不改 canonical 原作者。无作者时不要求不完整 `generated`，来源修改时刻仍须与扩展一致。
 - 快照固定运行 id、时刻与源/目标路径，然后重算摘要；已通读源清单、规则、未承载字段、
   不可得、异常和处置。快照不用于 `apply`，也不替代 M7 的独立 conformance。

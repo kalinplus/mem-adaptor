@@ -122,11 +122,11 @@ fn shared_frontmatter_preserves_empty_comments_and_unclosed_bodies() {
 fn markdown_damage_returns_located_private_errors() {
     for (bytes, expected) in [
         (
-            &b"---\nmem_adaptor: []\n---\nBody."[..],
+            &b"---\ntype: Memory\nmem_adaptor_envelope: okf:0.2\nmem_adaptor: []\n---\nBody."[..],
             "OKF mem_adaptor must be an object",
         ),
         (
-            &b"---\nmem_adaptor: null\n---\nBody."[..],
+            &b"---\ntype: Memory\nmem_adaptor_envelope: okf:0.2\nmem_adaptor: null\n---\nBody."[..],
             "OKF mem_adaptor must be an object",
         ),
         (
@@ -139,12 +139,12 @@ fn markdown_damage_returns_located_private_errors() {
         ),
         (&b"\xffprivate-value"[..], "Invalid UTF-8 source"),
         (
-            &b"---\ntype: Other\nmem_adaptor: {}\n---\nBody."[..],
+            &b"---\ntype: Other\nmem_adaptor_envelope: okf:0.2\nmem_adaptor: {}\n---\nBody."[..],
             "Unexpected OKF memory type",
         ),
         (
-            &b"---\ntype: Memory\nmem_adaptor: {}\n---\nBody."[..],
-            "Invalid OKF memory fields",
+            &b"---\ntype: Memory\nmem_adaptor_envelope: okf:0.2\nmem_adaptor: {}\n---\nBody."[..],
+            "Invalid OKF record fields",
         ),
     ] {
         let error = read(&MarkdownReader, &source(&[("nested/note.md", bytes)]))
@@ -320,9 +320,9 @@ fn claude_fallback_id_and_legacy_diagnostics_are_specific() {
     );
 }
 
-/// Registers actual links, not checkboxes; either missing OKF index marker keeps both root files ordinary.
+/// Registers actual links, not checkboxes; unsupported or old private index metadata keeps root files ordinary.
 #[test]
-fn index_recognition_requires_both_markers_and_registration_counts_links_only() {
+fn index_recognition_requires_native_version_only_and_registration_counts_links_only() {
     let output = read(
         &MarkdownReader,
         &source(&[(
@@ -335,7 +335,8 @@ fn index_recognition_requires_both_markers_and_registration_counts_links_only() 
     assert!(output[0].records.is_empty());
     for text in [
         "---\ntype: Index\n---\nBody.",
-        "---\nokf_version: '0.2'\n---\nBody.",
+        "---\ntype: Index\nokf_version: '0.2'\n---\nBody.",
+        "---\nokf_version: '0.3'\n---\nBody.",
     ] {
         let source = source(&[("index.md", text.as_bytes()), ("log.md", b"Log.")]);
         let claims = MarkdownReader.claim(&source.files);
@@ -478,7 +479,7 @@ fn mixed_bad_inputs_fail_cli_without_partial_plan_or_target_changes() {
         ),
         (
             "note.md",
-            &b"---\nmem_adaptor: private-value\n---\nBody."[..],
+            &b"---\ntype: Memory\nmem_adaptor_envelope: okf:0.2\nmem_adaptor: private-value\n---\nBody."[..],
             None,
             "OKF mem_adaptor must be an object",
         ),

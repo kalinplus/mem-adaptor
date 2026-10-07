@@ -103,7 +103,9 @@ fn run() -> Result<()> {
                 matches!(writer, "okf" | "ump"),
                 "Target must be okf:<directory> or ump:<directory>"
             );
-            let target = normalize_path(Path::new(target))?;
+            let target = mem_adaptor_core::writer::normalize_root(Path::new(target)).context(
+                "[S5] Target path validation failed before target writes; target unchanged. Choose a regular target directory, not a linked root, and plan again",
+            )?;
             let report_path = normalize_path(&report)?;
             ensure!(
                 !target.starts_with(&source) && !source.starts_with(&target),
@@ -155,8 +157,10 @@ fn run() -> Result<()> {
         }
         Command::Apply { plan, receipt, yes } => {
             let plan_path = normalize_path(&plan)?;
-            let report: PlanReport = serde_json::from_slice(&fs::read(&plan_path)?)
-                .map_err(|_| anyhow::anyhow!("Invalid plan report JSON or fields"))?;
+            let report: PlanReport = (|| -> Result<_> {
+                serde_json::from_slice(&fs::read(&plan_path)?)
+                    .map_err(|_| anyhow::anyhow!("Invalid plan report JSON or fields"))
+            })().context("[S7] Plan loading failed before target writes and before approval was saved; targets unchanged. Restore a valid plan or create a new one before proceeding")?;
             ensure!(
                 report.schema_version == SCHEMA_VERSION,
                 "Unsupported plan schema version"
@@ -172,11 +176,22 @@ fn run() -> Result<()> {
                     Ok((
                         target.id.clone(),
                         target.writer.clone(),
-                        normalize_path(Path::new(&target.location))?,
+                        // Keep the approved path literal: resolving a newly inserted parent link could approve another destination.
+                        PathBuf::from(&target.location),
                     ))
                 })
                 .collect::<Result<_>>()?;
-            let engine = engine(&targets)?;
+            // Constructor normalization must not change the destination serialized in the approved plan.
+            let engine = engine(&targets).context(
+                "[S7] Target setup failed before target writes and before approval was saved; this execution has not written targets. Inspect target paths and make a new plan",
+            )?;
+            ensure!(
+                report.targets.iter().all(|target| engine
+                    .registry
+                    .writer(&target.id)
+                    .is_ok_and(|writer| writer.location().to_string_lossy() == target.location)),
+                "[S7] Approved target path changed before target writes and before approval was saved; inspect target paths and make a new plan"
+            );
             let receipt_path = normalize_path(
                 &receipt.unwrap_or_else(|| plan_path.with_extension("receipt.json")),
             )?;
@@ -224,13 +239,15 @@ fn run() -> Result<()> {
                 approver: "local-user".into(),
             };
             // Record the user's approval of this basis, even if subsequent recomputation refuses execution.
-            write_json_new(&approval_path, &approval)?;
+            write_json_new(&approval_path, &approval).context(
+                "[S7] Approval save failed before target writes; targets unchanged, approval may be incomplete. Inspect the report path and create a new plan before proceeding; do not overwrite existing artifacts",
+            )?;
             let receipt = engine.apply(
                 &report,
                 &approval,
                 plan_path.to_string_lossy().into_owned(),
                 approval_path.to_string_lossy().into_owned(),
-            )?;
+            ).context("Apply failed; approval was saved but no reliable final receipt was saved. Follow the failed engine stage and inspect the target state before proceeding; do not blindly retry")?;
             // Engine execution is complete; receipt persistence can still fail after target writes.
             write_json_new(&receipt_path, &receipt).context(
                 "[S9] Final receipt save failed after engine execution; targets may already have changed and approval was saved. No reliable final receipt was saved. Inspect targets and report paths before deciding how to proceed; do not blindly retry",
@@ -256,8 +273,8 @@ fn engine(targets: &[(String, String, PathBuf)]) -> Result<Engine> {
     registry.register_reader(ClaudeReader)?;
     for (id, writer, path) in targets {
         match writer.as_str() {
-            "okf" => registry.register_writer(id.clone(), OkfWriter::new(path.clone()))?,
-            "ump" => registry.register_writer(id.clone(), UmpWriter::new(path.clone()))?,
+            "okf" => registry.register_writer(id.clone(), OkfWriter::new(path.clone())?)?,
+            "ump" => registry.register_writer(id.clone(), UmpWriter::new(path.clone())?)?,
             _ => unreachable!(),
         }
     }

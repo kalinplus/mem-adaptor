@@ -130,7 +130,7 @@ fn engine(directory: &TempDir, records: Vec<CanonicalRecord>) -> Engine {
     registry
         .register_writer(
             "home".into(),
-            OkfWriter::new(directory.path().join("target")),
+            OkfWriter::new(directory.path().join("target")).unwrap(),
         )
         .unwrap();
     Engine { registry }
@@ -259,7 +259,7 @@ fn native_id_collisions_do_not_cross_contaminate_findings_references_or_mappings
     registry
         .register_writer(
             "home".into(),
-            OkfWriter::new(directory.path().join("target")),
+            OkfWriter::new(directory.path().join("target")).unwrap(),
         )
         .unwrap();
     let report = Engine { registry }
@@ -423,7 +423,7 @@ fn prior_verdict_is_reused_but_does_not_override_secret_blocking() {
     registry
         .register_writer(
             "home".into(),
-            OkfWriter::new(directory.path().join("target")),
+            OkfWriter::new(directory.path().join("target")).unwrap(),
         )
         .unwrap();
     let report = Engine { registry }
