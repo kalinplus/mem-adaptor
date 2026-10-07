@@ -7,6 +7,7 @@
 ## 协作规则（每轮必读）
 
 完整说明见 [docs/review-workflow.md](docs/review-workflow.md)。本节约束交付节奏，不改变下面的架构铁律。
+执行代码 review（含委派的 review agent）时，按 [docs/review-rules.md](docs/review-rules.md) 的路径规则与低价值测试规则审查。
 
 ### 代码意图说明
 

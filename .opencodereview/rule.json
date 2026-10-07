@@ -1,0 +1,53 @@
+{
+  "include": [
+    "crates/**/tests/**/*.rs",
+    "crates/cli/tests/fixtures/**"
+  ],
+  "rules": [
+    {
+      "path": "crates/**/tests/**",
+      "rule": "Derived from docs/review-rules.md §2 and §3 (that file is the source of truth; read it before reviewing). Tests and fixtures are in scope. Report low-value tests: T1 failure tests that only assert is_err/panic/exit code; T2 error-string-only checks without target bytes, credentials, or output; T3 write and read-back proving each other with shared logic; T4 snapshots re-recorded without explaining the semantic change; T5 a claimed protection with only positive cases; T6 expected values computed by the code under test; T7 claiming the target is unchanged by checking one absent file; T8 test comments promising behavior the assertions do not check. Fixtures must be synthetic.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/core/src/source.rs",
+      "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 table A row by row (empty/unclaimed sources, multiple claims, corrupt or unsupported ZIP, traversal/duplicate/symlink entries, read failures, malformed JSON/YAML); for each row name the covering test and key assertion or report it as uncovered.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/reader-*/src/**",
+      "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 table A parse rows and table C field-preservation rows, plus docs/m4-reader-proposal.md §1 and §5. Unknown fields must be preserved in source_extra or listed as unmapped (no silent decay). Never guess a kind from body text or file names. Parse errors must not echo source values. Everything runs locally; no model calls. Name the covering test for each rule or report it as uncovered.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/core/src/reader.rs",
+      "rule": "Derived from docs/review-rules.md §3. Shared Reader normalization: check docs/testing-policy.md §3 table C, unmapped-field reporting, source_extra preservation, conflict rejection without choosing a value, and that diagnostics never copy source values.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/core/src/{engine,governance}.rs",
+      "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 tables B (approval, digest, history evidence) and D (write, read-back, receipt). Missing or invalid evidence must refuse writes, never fall back to a first run. Distinguish pre-write and post-write failures; never claim rollback or safe retry.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/core/{src/gate.rs,rules/**}",
+      "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 table C secret rows across pass/block/allowlist. Reports and errors must not leak values. The pass policy may write raw content; do not describe it as removing secrets.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/{writer-*/src/**,core/src/writer.rs}",
+      "rule": "Derived from docs/review-rules.md §3. Check docs/testing-policy.md §3 tables D and C. Unsupported embeddings need a structured re-embed plan; DNA fields that cannot be carried must be reported. Never take over unrelated user files; damaged managed records are refused before writing.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "{crates/core/src/reports.rs,schema/**}",
+      "rule": "Derived from docs/review-rules.md §3. Reports must truthfully separate plan, write, read-back, and save. Do not add report fields or error codes without a confirmed contract change.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "crates/cli/src/**",
+      "rule": "Derived from docs/review-rules.md §3. Failure output must state the stage, reason, target state, and next step. stdout/stderr must not leak sensitive values. Do not suggest a plain retry unless safe retry is proven.",
+      "merge_system_rule": true
+    }
+  ]
+}
