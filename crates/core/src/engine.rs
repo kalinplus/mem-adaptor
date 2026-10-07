@@ -187,6 +187,12 @@ struct PipelinePlan {
     previous: Option<ReceiptReport>,
 }
 
+/// Tracks the error boundary independently of receipts; starting a write does not prove it completed.
+struct ApplyState {
+    phase: &'static str,
+    writes_started: bool,
+}
+
 fn dedup_eligible(disposition: &Disposition) -> bool {
     matches!(
         disposition,
@@ -578,7 +584,7 @@ impl Engine {
                         "Target {target}: no previous receipt; deletion protection unavailable."
                     ));
                 }
-            } else if writer.location().exists()
+            } else if crate::writer::directory_exists(writer.location())?
                 && fs::read_dir(writer.location())?
                     .next()
                     .transpose()?
@@ -593,8 +599,8 @@ impl Engine {
                 artifacts: writer.artifacts(
                     &records
                         .values()
-                        .map(|record| writer.plan(record, None).target_id)
-                        .collect::<Vec<_>>(),
+                        .map(|record| writer.plan(record, None).map(|planned| planned.target_id))
+                        .collect::<Result<Vec<_>>>()?,
                 )?,
             });
             let shared_modified = previous
@@ -624,7 +630,7 @@ impl Engine {
                 let previous_entry = previous_entries
                     .get(&(target.clone(), record.canonical_id.clone()))
                     .copied();
-                let mut planned = writer.plan(record, previous_entry);
+                let mut planned = writer.plan(record, previous_entry)?;
                 planned.previous_write = previous_entry.and_then(|entry| entry.prior_write.clone());
                 planned.duplicate_write =
                     previous_entry.and_then(|entry| entry.duplicate_write.clone());
@@ -644,9 +650,16 @@ impl Engine {
                     {
                         match writer.inspect(&prior.target_id)? {
                             None => {
-                                planned.disposition = Disposition::Omitted {
-                                    reason: OmissionReason::DeletedInTarget,
-                                }
+                                planned.disposition =
+                                    if writer.target_hash(&prior.target_id)?.is_some() {
+                                        Disposition::Unresolved {
+                                            reason: UnresolvedReason::TargetModified,
+                                        }
+                                    } else {
+                                        Disposition::Omitted {
+                                            reason: OmissionReason::DeletedInTarget,
+                                        }
+                                    }
                             }
                             Some(actual)
                                 if record_hash(&actual)? != prior.record_hash
@@ -697,7 +710,7 @@ impl Engine {
                 } else if matches!(
                     planned.disposition,
                     Disposition::Accepted | Disposition::Transformed { .. }
-                ) && writer.inspect(&planned.target_id)?.is_some()
+                ) && writer.target_hash(&planned.target_id)?.is_some()
                 {
                     planned.disposition = Disposition::Unresolved {
                         reason: UnresolvedReason::TargetUntracked,
@@ -753,7 +766,7 @@ impl Engine {
                         }
                     } else {
                         planned.duplicate_write = None;
-                        if writer.inspect(&planned.target_id)?.is_some() {
+                        if writer.target_hash(&planned.target_id)?.is_some() {
                             planned.disposition = Disposition::Unresolved {
                                 reason: UnresolvedReason::TargetUntracked,
                             };
@@ -942,6 +955,36 @@ impl Engine {
         plan_ref: String,
         approval_ref: String,
     ) -> Result<ReceiptReport> {
+        let mut state = ApplyState {
+            phase: "[S7] Approval and execution-basis checks",
+            writes_started: false,
+        };
+        self.apply_checked(approved, approval, plan_ref, approval_ref, &mut state)
+            .with_context(|| {
+                if state.writes_started {
+                    format!(
+                        "{} failed after target writing began; targets may be partially changed. No reliable final receipt was produced. Inspect all targets and the saved approval before deciding how to proceed; do not blindly retry",
+                        state.phase
+                    )
+                } else {
+                    format!(
+                        "{} failed before target writes began; this execution has not written targets. Check the inputs, target state and approval, then create and approve a new plan",
+                        state.phase
+                    )
+                }
+            })
+    }
+
+    /// Executes the checked pipeline while updating the boundary used for ordinary failure context.
+    /// Does not persist approval/receipt files or roll back an earlier target when a later operation fails.
+    fn apply_checked(
+        &self,
+        approved: &PlanReport,
+        approval: &ApprovalReceipt,
+        plan_ref: String,
+        approval_ref: String,
+        state: &mut ApplyState,
+    ) -> Result<ReceiptReport> {
         info!("[S7] checking approval and recomputing plan");
         crate::schema::validate("plan-report", approved)?;
         crate::schema::validate("approval-receipt", approval)?;
@@ -1001,6 +1044,7 @@ impl Engine {
         let mut entries = Vec::new();
         let mut output_artifacts: BTreeMap<String, Vec<TargetArtifact>> = BTreeMap::new();
         for (target, batch) in current.batches {
+            state.phase = "[S8] Target pre-write checks";
             let writer = self.registry.writer(&target)?;
             let approved_target = approved
                 .targets
@@ -1031,8 +1075,11 @@ impl Engine {
                 batch_hash(&writable)?,
             );
             info!(records = writable.len(), "[S8] writing approved batch");
+            state.phase = "[S8] Writing approved batch";
+            state.writes_started |= !writable.is_empty();
             let result = writer.write(&writable, &token)?;
             let written = result.written;
+            state.phase = "[S9] Writer output-proof verification";
             ensure!(
                 written.len() == writable.len(),
                 "Writer receipt count mismatch"
@@ -1061,6 +1108,7 @@ impl Engine {
             }
             output_artifacts.insert(target.clone(), result.artifacts);
             info!(records = written.len(), "[S9] reading target back");
+            state.phase = "[S9] Read-back and native-payload verification";
             let read_back: BTreeMap<_, _> = writer
                 .read_back(&written)?
                 .into_iter()
@@ -1122,6 +1170,7 @@ impl Engine {
                 });
             }
         }
+        state.phase = "[S9] Final receipt verification";
         for entry in &current.report.entries {
             if !matches!(
                 entry.disposition,

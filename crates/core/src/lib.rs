@@ -5,6 +5,7 @@ pub mod engine;
 pub mod gate;
 pub mod governance;
 pub mod jcs;
+pub mod okf;
 pub mod plugins;
 pub mod reader;
 pub mod reports;

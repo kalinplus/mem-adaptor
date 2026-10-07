@@ -1,8 +1,7 @@
 ---
-type: Index
 okf_version: '0.2'
-mem_adaptor_index: true
 ---
+<!-- mem-adaptor:okf-index:v1 -->
 # Memory index
 
 ## user

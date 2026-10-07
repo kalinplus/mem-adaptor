@@ -189,14 +189,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -267,14 +267,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -354,14 +354,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -453,19 +453,24 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
         },
         {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
-        },
-        {
           "canonical_path": "",
           "target_path": "/frontmatter/mem_adaptor",
           "rule": "canonical_metadata_without_body_or_embedding_vector"
+        },
+        {
+          "canonical_path": "/updated_at",
+          "target_path": "/frontmatter/sources/0/last_modified",
+          "rule": "source_record_modified_time_not_fact_time"
         }
       ],
       "unmapped": [
@@ -534,14 +539,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -626,14 +631,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -666,14 +671,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -706,14 +711,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -746,19 +751,24 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
               },
               {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
-              },
-              {
                 "canonical_path": "",
                 "target_path": "/frontmatter/mem_adaptor",
                 "rule": "canonical_metadata_without_body_or_embedding_vector"
+              },
+              {
+                "canonical_path": "/updated_at",
+                "target_path": "/frontmatter/sources/0/last_modified",
+                "rule": "source_record_modified_time_not_fact_time"
               }
             ]
           }
@@ -786,14 +796,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -894,5 +904,5 @@
       "user_selected": false
     }
   },
-  "plan_digest": "sha256:ede58c4d0d12c01e7cca6d5f0b377b7b9238aa052a1f65d41110fb3ba7bd1059"
+  "plan_digest": "sha256:59b1dc3fba4a76becbfa08201ce2423529f416e19906803367559d62dea7fe44"
 }

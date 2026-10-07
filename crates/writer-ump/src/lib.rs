@@ -1,4 +1,6 @@
 //! Writer for Universal Memory Protocol JSON file targets.
+//! Uses shared fixed-path and regular-file checks at the local target boundary.
+//! Approval and read-back remain engine responsibilities; replacement is per file, not a whole-run transaction.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -26,8 +28,11 @@ pub struct UmpWriter {
 }
 
 impl UmpWriter {
-    pub fn new(location: PathBuf) -> Self {
-        Self { location }
+    /// Fixes the physical target location before approval and refuses an explicitly linked root.
+    pub fn new(location: PathBuf) -> Result<Self> {
+        Ok(Self {
+            location: target::normalize_root(&location)?,
+        })
     }
 
     fn native_records(&self) -> Result<Vec<Value>> {
@@ -165,8 +170,9 @@ impl Writer for UmpWriter {
             update: true,
         }
     }
-    fn plan(&self, record: &CanonicalRecord, previous: Option<&ReceiptEntry>) -> Planned {
-        Planned {
+    /// Projects UMP fields without writes, using the shared fallible planning contract.
+    fn plan(&self, record: &CanonicalRecord, previous: Option<&ReceiptEntry>) -> Result<Planned> {
+        Ok(Planned {
             record: record.clone(),
             disposition: if target::redact_requires_processing(record) {
                 Disposition::Rejected {
@@ -211,7 +217,7 @@ impl Writer for UmpWriter {
                     "untrusted_declaration_not_authorization",
                 ),
             ],
-        }
+        })
     }
     fn write(
         &self,

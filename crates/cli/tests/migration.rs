@@ -263,6 +263,11 @@ fn noninteractive_apply_requires_explicit_approval() {
         directory.path().join("plan.json").to_str().unwrap(),
     ]);
     assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Noninteractive apply requires explicit --yes")
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
     assert!(!directory.path().join("target").exists());
     assert!(!directory.path().join("plan.approval.json").exists());
 }

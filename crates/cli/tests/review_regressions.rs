@@ -1,3 +1,6 @@
+//! Exercises historical mapping and privacy regressions through real local adapters.
+//! All sources and targets are isolated synthetic fixtures; these tests do not establish conformance.
+
 use std::fs;
 use std::path::Path;
 
@@ -16,17 +19,18 @@ fn fixture() -> TempDir {
     directory
 }
 
+/// Registers a validated physical test target for the selected local Writer.
 fn engine(directory: &TempDir, writer: &str) -> Engine {
     let mut registry = Registry::default();
     registry.register_reader(MarkdownReader).unwrap();
     let target = directory.path().join("target");
     if writer == "okf" {
         registry
-            .register_writer("home".into(), OkfWriter::new(target))
+            .register_writer("home".into(), OkfWriter::new(target).unwrap())
             .unwrap();
     } else {
         registry
-            .register_writer("home".into(), UmpWriter::new(target))
+            .register_writer("home".into(), UmpWriter::new(target).unwrap())
             .unwrap();
     }
     Engine { registry }

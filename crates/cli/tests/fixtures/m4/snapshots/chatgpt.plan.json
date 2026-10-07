@@ -188,14 +188,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -253,14 +253,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -318,14 +318,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -395,14 +395,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -466,14 +466,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -526,14 +526,14 @@
           "rule": "first_nonempty_line_80_unicode_characters"
         },
         {
+          "canonical_path": "/source_record_id",
+          "target_path": "/frontmatter/sources/0/id",
+          "rule": "source_record_id"
+        },
+        {
           "canonical_path": "/source_locator",
           "target_path": "/frontmatter/sources/0/resource",
           "rule": "source_locator"
-        },
-        {
-          "canonical_path": "/updated_at",
-          "target_path": "/frontmatter/generated/at",
-          "rule": "source_record_modified_time_not_fact_time"
         },
         {
           "canonical_path": "",
@@ -650,14 +650,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -690,14 +690,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -730,14 +730,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -770,14 +770,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -813,14 +813,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -853,14 +853,14 @@
                 "rule": "first_nonempty_line_80_unicode_characters"
               },
               {
+                "canonical_path": "/source_record_id",
+                "target_path": "/frontmatter/sources/0/id",
+                "rule": "source_record_id"
+              },
+              {
                 "canonical_path": "/source_locator",
                 "target_path": "/frontmatter/sources/0/resource",
                 "rule": "source_locator"
-              },
-              {
-                "canonical_path": "/updated_at",
-                "target_path": "/frontmatter/generated/at",
-                "rule": "source_record_modified_time_not_fact_time"
               },
               {
                 "canonical_path": "",
@@ -964,5 +964,5 @@
       "user_selected": false
     }
   },
-  "plan_digest": "sha256:0f299257572b3fc21b8f82c2ea9249565e1fe6c32152823494bd086fa31ca6a7"
+  "plan_digest": "sha256:d32561879672d2947b3c937d5a781d69012b08635825fad6c46fc3671f8566fd"
 }

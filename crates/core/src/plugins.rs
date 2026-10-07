@@ -1,3 +1,6 @@
+//! Adapter interfaces and registry between local source parsing and approved target writes.
+//! Planning may inspect the target and must propagate filesystem errors, never downgrade them to absence.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +89,8 @@ pub trait Writer {
     fn version(&self) -> &'static str;
     fn location(&self) -> &Path;
     fn capabilities(&self) -> Capabilities;
-    fn plan(&self, record: &CanonicalRecord, previous: Option<&ReceiptEntry>) -> Planned;
+    /// Projects a record and target disposition without writes; inspection failures abort planning.
+    fn plan(&self, record: &CanonicalRecord, previous: Option<&ReceiptEntry>) -> Result<Planned>;
     fn write(&self, batch: &[Planned], token: &WriteToken) -> Result<WriteResult>;
     fn read_back(&self, written: &[Written]) -> Result<Vec<ReadBack>>;
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>>;

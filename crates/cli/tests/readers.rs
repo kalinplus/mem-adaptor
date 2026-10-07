@@ -76,7 +76,7 @@ fn engine(target: &Path) -> Engine {
     registry.register_reader(ChatgptReader).unwrap();
     registry.register_reader(ClaudeReader).unwrap();
     registry
-        .register_writer("home".into(), OkfWriter::new(target.into()))
+        .register_writer("home".into(), OkfWriter::new(target.into()).unwrap())
         .unwrap();
     Engine { registry }
 }
@@ -489,7 +489,7 @@ fn okf_indices_and_runtime_logs_are_registered_without_becoming_memories() {
     let inventory = files(&[
         (
             "index.md",
-            "---\ntype: Index\nokf_version: '0.2'\n---\n- [Synthetic](memories/note.md)\n",
+            "---\nokf_version: '0.2'\n---\n- [Synthetic](memories/note.md)\n",
         ),
         ("log.md", "# Synthetic log\n"),
         (".mem-adaptor/plan.md", "Never parse a runtime report."),
