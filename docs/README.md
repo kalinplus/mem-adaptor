@@ -17,6 +17,7 @@
 | 查看 M3 的审批与回执链契约 | [m3-contract-proposal.md](m3-contract-proposal.md) — 已确认、已实现的元数据摘要与历史写入验证字段 |
 | 查看 M4 的 Reader 契约与验收 | [m4-reader-proposal.md](m4-reader-proposal.md) — 已确认、已实现的类别保护映射、未知字段传递与输入约定 |
 | 查看 M5 的 Writer 契约与验收 | [m5-writer-proposal.md](m5-writer-proposal.md) — 已确认、已实现的 OKF/UMP 映射、原生哈希与共享产物审批绑定 |
+| 理解 OKF 迁移审查发现了什么 | [m5-okf-review.md](m5-okf-review.md) — 按批准、目标判断、原生输出、失败告知与测试证据解释问题，不把测试通过当成完整验收 |
 | 查看 M0–M5 review 的七项修复 | [m0-m5-review-fixes.md](m0-m5-review-fixes.md) — 已实施的检测、精度、历史身份与 Writer 产出证明修复 |
 | 查看 M6 的家模式边界 | [m6-cli-proposal.md](m6-cli-proposal.md) — 两项推荐已确认，实施暂停 |
 | 查看历史实现与实验记录 | [PROGRESS.md](PROGRESS.md) — 五问表、历史验证与回看资料，不再作为任务状态正本；新任务使用 GitHub Issue/PR |
