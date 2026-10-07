@@ -1,4 +1,8 @@
-# 实现计划：MVP D1
+# 初版实施方案：MVP D1
+
+**文档定位：初版实施方案，供历史参考。** 本文保留实施路径与验收设想，
+不再追加进展记录，也不代表当前实现或人工验收状态。
+当前任务、验证证据与交接以 GitHub Issue/PR 为准；实际目录、依赖版本与接口签名以源码为准。
 
 这份文档把 [design.md](design.md) 的设计落到「先写什么、怎么验收」。设计本身以 design.md 为准，
 这里只增加**实现层的选择**（语言、仓库布局、接口签名、里程碑）。两边冲突时以 design.md 为准，
@@ -107,32 +111,32 @@ pub trait Writer {
 JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_id` 排序的
 `{canonical_id, content_hash, record_hash, 处置预测}`。
 `record_hash = sha256(JCS(canonical record))`，绑定正文、scope、consent、来源版本等元数据；
-逐目标预测的 `prior_write` 同时绑定覆盖前的历史目标状态（M3 契约补充已确认）。
+逐目标预测的 `prior_write` 同时绑定覆盖前的历史目标状态。
 **摘要的全部输入都写在计划报告里**，所以 conformance 执行器
 不用 import 引擎就能独立重算。时间戳、运行 id 不进摘要，否则同一计划重跑摘要会变。
 
 **`canonical_id`** = `sha256(source.system ‖ 0x00 ‖ source_record_id)` 取前 20 字节，
-转无 padding 的小写 base32，共 32 字符（M1 字段方案由用户确认）。
+转无 padding 的小写 base32，共 32 字符。
 确定性派生，同一条源记录重跑得到同一个 id，所以 OKF 家的文件名（DEC-19）跨次稳定。
 源里没有 id 的记录，`source_record_id` 按 Reader 规定取：Markdown 用相对路径，Prompt 抽取文本用归一化后的行内容哈希
 （这一类内容一改就成了新记录，计划报告里会显示为一增一删，见 §4 M5）。
 
 ## 3. 选定的依赖
 
-都是 crates.io 上 2026-10 的当前版本；带「待验证」的在对应里程碑里先做一个小实验再定。
+以下为方案中的依赖选择，不作为当前依赖清单；需验证的行为在对应里程碑里先做小实验再定。
 
 | 用途 | crate | 备注 |
 |---|---|---|
 | CLI | `clap` 4 | |
 | 日志 | `tracing` + `tracing-subscriber` | 级别由 `LOG_LEVEL` 控制；阶段前缀 `[S1]`…`[S9]` |
-| JSON / 规范化 | `serde_json`（`preserve_order`）、`serde_jcs` 0.2 | M2 实测：0.1 的键排序不符 UTF-16，0.2 通过专项测试 |
+| JSON / 规范化 | `serde_json`（`preserve_order`）、`serde_jcs` 0.2 | 需验证 UTF-16 键排序与数字规范化 |
 | JSON Schema 校验 | `jsonschema` | 只在测试和 `core` 的第 3 阶段校验里用 |
-| YAML frontmatter | `serde-saphyr` 1.3.0（**已验证**） | M2 已验证：配合 `serde_json/preserve_order` 保留未知键、嵌套类型与键顺序（OKF §4.1） |
-| ZIP | `zip` 8.6.0 | 当前稳定版，仅启用 deflate；不使用预发布版 |
+| YAML frontmatter | `serde-saphyr` 1.3.0 | 需验证配合 `serde_json/preserve_order` 保留未知键、嵌套类型与键顺序（OKF §4.1） |
+| ZIP | `zip` 8.6.0 | 选择稳定版，仅启用 deflate；不使用预发布版 |
 | TOML 配置 | `toml` | |
 | 哈希 / 编码 | `sha2`、`data-encoding`（base32） | UMP 的 blake3 只在 L3 需要，D1 不引入 |
-| 正则 | `regex` | M3 已验证并复用 Gitleaks（MIT）六条正则；加本地密码赋值规则，署名随数据分发 |
-| 快照测试 | `serde_json` 值比较 | M4 用合成 JSON golden 文件；固定运行字段/路径后重算摘要，不额外引入 insta |
+| 正则 | `regex` | 需验证 Gitleaks（MIT）规则兼容性；复用子集并保留署名，补本地密码赋值规则 |
+| 快照测试 | `serde_json` 值比较 | 使用合成 JSON golden 文件；固定运行字段/路径后重算摘要，不额外引入 insta |
 | 交互 | `dialoguer` 或直接读 stdin；TTY 判定用 `std::io::IsTerminal` | |
 
 ## 4. 里程碑
@@ -142,7 +146,6 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 
 ### M0 准备
 
-- **已完成，2026-10-05**：验收与后续 TODO 见 [PROGRESS.md](PROGRESS.md) 的「D1 实现 TODO」。
 - 开始实施时**不是 git 仓库**，先 `git init`。`.gitignore` 已挡住密钥和实验数据，还要补两处：
   加 `target/`（Rust 构建产物）；现有的全局 `*.jsonl` 规则会把合成 fixtures 也挡掉，要加例外 `!fixtures/**/*.jsonl`。
   根目录的 `.mcp.json` 进库前先看一眼有没有凭据。
@@ -152,8 +155,6 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 
 ### M1 schema 正本 v0
 
-- **已完成，2026-10-05**：字段方案见 [schema-v0-proposal.md](schema-v0-proposal.md)，
-  正本在 `schema/`，验收记录见 [PROGRESS.md](PROGRESS.md) 的「D1 实现 TODO」。
 - 手写五份 JSON Schema（draft 2020-12），字段对齐 design.md §2（canonical model）和 §3（报告顶层字段、五态、验证结果）。
   D1 用不到的字段（向量层、冲突裁决）先写进 schema，标为可选，避免 D2 再改 schema 版本。
 - 报告顶层带 `schema_version`；计划报告含：源清单（含无人认领的文件和只登记不转换的会话记录及其计数）、
@@ -166,8 +167,6 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 
 ### M2 walking skeleton：端到端跑通
 
-- **已完成，2026-10-05**：验收见 [PROGRESS.md](PROGRESS.md)；当前 CLI 限合成数据使用，
-  `--report` 显式指定计划报告位置，非交互 `apply` 需显式 `--yes`。
 用最薄的真实实现把九个阶段串起来：
 
 - 引擎九阶段全部存在，其中闸门（无规则）、去重（不去重）、回执链（不读旧回执）先是直通桩。
@@ -185,10 +184,6 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 - 日志按 `[S1]`…`[S9]` 打出每阶段输入/输出规模。
 
 ### M3 引擎切片
-
-- **已完成，2026-10-05**：验收见 [PROGRESS.md](PROGRESS.md)；[契约补充](m3-contract-proposal.md)
-  已确认并实现。CLI 已有 `--secret-policy`、`--allow-rule`、`--previous-receipt`；
-  配置持久化和首次交互仍由 M6 实现。
 
 逐个把桩换成真实实现，每段单独提交：
 
@@ -215,15 +210,11 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 
 ### M4 三个 Reader
 
-- **已完成合成验收，2026-10-05**：两项契约已确认，[Reader 方案](m4-reader-proposal.md)
-  记输入约定和限制；16 项 Reader 测试、逐条字段与跨平台 id 重名回归、三份报告快照通过。
-  当前共 62 个测试；真实导出核实仍在 M7。
-
-源数据形状以 [source-memory-formats.md](source-memory-formats.md) 与 [PROGRESS.md](PROGRESS.md)
-「网页端记忆导出形态」一节为准。我们**手上没有任何真导出包**，fixtures 是按文档合成的
+源数据形状以 [source-memory-formats.md](source-memory-formats.md) 为准。
+初版按文档合成 fixtures，不以真实导出包作为开工前提
 （形状参照 Remnic 的 MIT 合成 fixtures，但自己写），所以这些 Reader 产出的记录 `evidence_level` 为「第三方核对」，直到 M7 用真导出核过。
 这句话限定网页导出；本地 Markdown 按实际读取标记实测，类别未知仍标推断，OKF 恢复原证据等级。
-未知源 metadata 经用户确认保存在可选 `source_extra`，绑定完整记录摘要并接受闸门检测，
+未知源 metadata 保存在可选 `source_extra`，绑定完整记录摘要并接受闸门检测，
 报告只列路径和保留位置；每条源记录独立携带映射与未承载清单。
 
 **reader-markdown**（含 OKF 家、Obsidian、Claude Code 的 `memory/` 目录）
@@ -267,9 +258,8 @@ ChatGPT / Claude 的 ZIP fixtures 的源清单里，会话记录被认领并计�
 D1 不写 `*.ump.md`（需要时再加，届时 front-matter 必须是 JSON）。
 校验：用 vendored 的 UMP 官方 JSON Schema（`lab/upstream/universal-memory-protocol/src/schema/ump-record.schema.json`，Apache-2.0）校验每条输出。
 
-**已实施（合成验收）**：17 个 Writer 测试和四份原生产物快照，review 修复后全 workspace 共 87 个测试。
-`crates/writer-ump/schema/` 随包分发官方 schema、license 和来源，运行不依赖 `lab/upstream`。
-原生 `target_hash`、共享 `artifacts` 与 `target_map` 的契约已经确认并进入审批；
+官方 schema、license 和来源需通过 `crates/writer-ump/schema/` 随包分发，运行不依赖 `lab/upstream`。
+原生 `target_hash`、共享 `artifacts` 与 `target_map` 需进入审批依据；
 WriteToken 核对 Writer 读取的原生字节。源创建时刻缺失时明确标为目标迁移时间，更新保持不变；
 非空 `consent.redact` 未经处理时拒写。具体映射和限制见 [M5 方案](m5-writer-proposal.md)。
 
@@ -315,7 +305,7 @@ D1 完成的标准：M0–M7 验收项全部通过；用真实的 Claude Code �
 
 ## 5. 横切要求
 
-- **日志也是出站路径**：日志只打规模、id、规则 id、耗时，不打记录正文，更不打命中值（M3 的测试覆盖日志）。
+- **日志也是出站路径**：日志只打规模、id、规则 id、耗时，不打记录正文，更不打命中值（M3 的测试需覆盖日志）。
 - **报告是敏感文件**：默认写到家目录或用户指定目录，不写到仓库内；文档和 CLI 首次运行时提示。
 - **fail fast**：解析错误在系统边界（源文件、配置、用户输入）报清楚是哪个文件哪一行；内部不写防御代码。
   单条源记录坏了进异常清单继续跑，整个文件不可解析就报错退出。
@@ -329,8 +319,8 @@ D1 完成的标准：M0–M7 验收项全部通过；用真实的 Claude Code �
 |---|---|---|
 | M1 | schema v0 的字段与命名（核心资产，定了以后改就是 schema 升版） | 对齐 design.md §2、§3 |
 | M3 | 密钥规则的来源：复用 gitleaks 子集还是手写 | 能编译就复用 |
-| M4（已确认） | `dna_class` 映射表；逐条未知 metadata 的 `source_extra` 通道 | 已采用如上表与内部可选字段 |
-| M5（已确认） | UMP `kind`；OKF title；缺失创建时刻；完整目标哈希与共享产物审批绑定 | 保守 kind、首行 title、明确迁移时间，完整目标保护 |
+| M4 | `dna_class` 映射表；逐条未知 metadata 的 `source_extra` 通道 | 按上表分类，通过内部可选字段保留未知 metadata |
+| M5 | UMP `kind`；OKF title；缺失创建时刻；完整目标哈希与共享产物审批绑定 | 保守 kind、首行 title、明确迁移时间，完整目标保护 |
 
 ## 7. D2–3 入口（届时再细化）
 
@@ -339,5 +329,5 @@ D1 完成的标准：M0–M7 验收项全部通过；用真实的 Claude Code �
 | Mem0 Writer（HTTP，`infer=False`） | 能力声明要写明 `created_at` 变成迁移时间、`role=system` 被跳过、目标侧会调 embedding（DEC-15、DEC-12）；§6 Q9 远程去向是否单独一档闸门 |
 | basic-memory Writer | 文件式，复用 writer-okf 的大部分逻辑 |
 | PII 检测（接现成 NER） | Rust 侧没有成熟的 NER：在「Presidio 作为本地子进程」与「ONNX 模型进程内推理」之间选；中文 PII 的覆盖要实测 |
-| 审批钩子（Panella 式哈希链凭证） | 把 D1 的本地审批凭证换成可插拔后端，接口在 M2 已留好 |
+| 审批钩子（Panella 式哈希链凭证） | 把 D1 的本地审批凭证换成可插拔后端，在 M2 预留所需接口 |
 | 删除语义映射（§6 Q6） | 需先完成设计 |
