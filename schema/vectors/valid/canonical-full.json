@@ -3,7 +3,7 @@
   "expected_valid": true,
   "document": {
     "canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "source": {"system": "markdown", "adapter_version": "0.1.0", "export_version": "unknown"},
+    "source": {"system": "markdown", "adapter_version": "0.1.0", "export_version": "unknown", "satellite_id": "abcd2345"},
     "source_record_id": "notes/example.md",
     "source_locator": "notes/example.md",
     "scope": "project",

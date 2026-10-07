@@ -38,7 +38,12 @@ pub fn load_source(path: &Path) -> Result<SourceFs> {
     };
     let mut files = BTreeMap::new();
     visit(directory, directory, &mut files)?;
-    Ok(SourceFs { root, files })
+    // The engine stamps the run's satellite identity after loading; the loader never derives it.
+    Ok(SourceFs {
+        root,
+        files,
+        satellite_id: None,
+    })
 }
 
 /// Recursively inventories real files, rejecting child symlinks and propagating any failed read.

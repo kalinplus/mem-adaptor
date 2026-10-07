@@ -136,6 +136,55 @@ fn previous_receipt_hash_is_typed_and_schema_constrained() {
     }
 }
 
+/// Accepts registered satellite identities (DEC-20) and rejects malformed IDs, missing IDs, empty labels,
+/// and unknown satellite members; the receipt contract inherits the same definition by cross-schema reference.
+#[test]
+fn satellite_identity_is_typed_and_schema_constrained() {
+    let validators = validators();
+    let mut document = serde_json::to_value(support::plan_full()).unwrap();
+    assert_eq!(document["source"]["satellite"]["id"], json!("abcd2345"));
+    assert_valid(&validators["plan-report"], &document, "satellite plan");
+    assert_eq!(typed_round_trip("plan-report", &document), document);
+    document["source"]["satellite"] = json!({"id": "abcd2345"});
+    assert_valid(
+        &validators["plan-report"],
+        &document,
+        "satellite without label",
+    );
+    assert_eq!(typed_round_trip("plan-report", &document), document);
+    for invalid in [
+        json!({"id": "abcd2341"}),
+        json!({"id": "abcd234"}),
+        json!({"id": "ABCD2345"}),
+        json!({"label": "Synthetic satellite"}),
+        json!({"id": "abcd2345", "label": ""}),
+        json!({"id": "abcd2345", "path": "/synthetic-source"}),
+    ] {
+        document["source"]["satellite"] = invalid;
+        assert!(!validators["plan-report"].is_valid(&document));
+    }
+    let mut receipt = serde_json::to_value(support::receipt(true)).unwrap();
+    assert_valid(&validators["receipt-report"], &receipt, "satellite receipt");
+    assert_eq!(typed_round_trip("receipt-report", &receipt), receipt);
+    receipt["source"]["satellite"]["id"] = json!("abcd2341");
+    assert!(!validators["receipt-report"].is_valid(&receipt));
+    let mut record = serde_json::to_value(support::canonical_full()).unwrap();
+    assert_eq!(record["source"]["satellite_id"], json!("abcd2345"));
+    assert_valid(&validators["canonical-record"], &record, "satellite record");
+    assert_eq!(typed_round_trip("canonical-record", &record), record);
+    for invalid in [json!("abcd2341"), json!("abcd23456"), json!("")] {
+        record["source"]["satellite_id"] = invalid;
+        assert!(!validators["canonical-record"].is_valid(&record));
+    }
+    let direct = serde_json::to_value(support::canonical()).unwrap();
+    assert!(direct["source"].get("satellite_id").is_none());
+    assert_valid(
+        &validators["canonical-record"],
+        &direct,
+        "direct-migration record without satellite",
+    );
+}
+
 /// Accepts truthful missing-source dispositions and rejects the unpublished, misleading deletion vocabulary.
 #[test]
 fn missing_source_vocabulary_matches_rust_and_schema() {

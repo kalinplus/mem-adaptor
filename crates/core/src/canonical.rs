@@ -78,12 +78,17 @@ pub struct CanonicalRecord {
 }
 
 /// Identifies the source system and adapter/export versions without interpreting its native record IDs.
+/// The optional satellite anchors record identity in home mode (DEC-20); it is absent in direct migration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceIdentity {
     pub system: String,
     pub adapter_version: String,
     pub export_version: String,
+    /// Registered satellite ID (8 lowercase base32 chars) participating in canonical_id.
+    /// The stored value is authoritative on home read-back; it is never re-derived from run context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub satellite_id: Option<String>,
 }
 
 /// Source-side address category, never an access-control boundary.

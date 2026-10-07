@@ -29,6 +29,7 @@ pub fn canonical() -> CanonicalRecord {
             system: "markdown".into(),
             adapter_version: "0.1.0".into(),
             export_version: "unknown".into(),
+            satellite_id: None,
         },
         source_record_id: "example.md".into(),
         source_locator: "example.md".into(),
@@ -74,6 +75,7 @@ pub fn canonical() -> CanonicalRecord {
 /// Populates every optional record field for serialization coverage; these combined declarations are not a migration scenario.
 pub fn canonical_full() -> CanonicalRecord {
     let mut record = canonical();
+    record.source.satellite_id = Some("abcd2345".into());
     record.scope_qualifier = Some("synthetic-project".into());
     record.owner_declared = Some("untrusted-example".into());
     record.source_kind = Some("preference".into());
@@ -185,6 +187,7 @@ pub fn plan() -> PlanReport {
                 id: "markdown".into(),
                 version: "0.1.0".into(),
             }],
+            satellite: None,
         },
         source_inventory: SourceInventory {
             files: vec![],
@@ -219,6 +222,10 @@ pub fn plan() -> PlanReport {
 /// Adds populated inventory, mappings, predictions, and diagnostics to exercise optional plan serialization.
 pub fn plan_full() -> PlanReport {
     let mut report = plan();
+    report.source.satellite = Some(SatelliteSpec {
+        id: "abcd2345".into(),
+        label: Some("Synthetic satellite".into()),
+    });
     report.source_inventory = SourceInventory {
         files: vec![InventoryFile {
             path: "example.md".into(),

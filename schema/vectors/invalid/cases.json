@@ -67,6 +67,11 @@
     {"base": "valid/config.json", "constraint": "gate actions are only pass or block", "patch": [{"op": "add", "path": "/gate_policy/secrets", "value": "disabled"}]},
     {"base": "valid/config.json", "constraint": "default policy is not claimed as a user choice", "patch": [{"op": "add", "path": "/gate_policy/origin", "value": "default"}]},
     {"base": "valid/config.json", "constraint": "OKF home version is pinned at 0.2", "patch": [{"op": "add", "path": "/home/okf_version", "value": "0.1"}]},
-    {"base": "valid/config.json", "constraint": "schema version is explicit and pinned", "patch": [{"op": "add", "path": "/schema_version", "value": "0.2.0"}]}
+    {"base": "valid/config.json", "constraint": "schema version is explicit and pinned", "patch": [{"op": "add", "path": "/schema_version", "value": "0.2.0"}]},
+    {"base": "valid/canonical-full.json", "constraint": "satellite ID uses the canonical base32 alphabet", "patch": [{"op": "add", "path": "/source/satellite_id", "value": "abcd2341"}]},
+    {"base": "valid/canonical-full.json", "constraint": "satellite ID is exactly 8 characters", "patch": [{"op": "add", "path": "/source/satellite_id", "value": "abcd234"}]},
+    {"base": "valid/plan.json", "constraint": "satellite identity requires its registered ID", "patch": [{"op": "remove", "path": "/source/satellite/id"}]},
+    {"base": "valid/plan.json", "constraint": "satellite identity binds no source path", "patch": [{"op": "add", "path": "/source/satellite/path", "value": "/synthetic-source"}]},
+    {"base": "valid/receipt.json", "constraint": "receipt source inherits the satellite ID pattern", "patch": [{"op": "add", "path": "/source/satellite/id", "value": "abcd2341"}]}
   ]
 }

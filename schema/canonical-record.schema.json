@@ -54,6 +54,7 @@
     "nonempty": {"type": "string", "minLength": 1},
     "strings": {"type": "array", "items": {"type": "string"}},
     "canonical_id": {"type": "string", "pattern": "^[a-z2-7]{32}$"},
+    "satellite_id": {"type": "string", "pattern": "^[a-z2-7]{8}$"},
     "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "timestamp": {"type": "string", "format": "date-time"},
     "duration": {"type": "string", "format": "duration"},
@@ -65,7 +66,8 @@
       "properties": {
         "system": {"$ref": "#/$defs/nonempty"},
         "adapter_version": {"$ref": "#/$defs/nonempty"},
-        "export_version": {"$ref": "#/$defs/nonempty"}
+        "export_version": {"$ref": "#/$defs/nonempty"},
+        "satellite_id": {"$ref": "#/$defs/satellite_id"}
       }
     },
     "entity": {

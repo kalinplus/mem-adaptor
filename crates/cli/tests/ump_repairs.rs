@@ -71,6 +71,7 @@ fn record(id: &str, body: &str) -> CanonicalRecord {
     source::record(
         "ump-repair-test",
         "test",
+        None,
         id,
         "synthetic.json",
         body,

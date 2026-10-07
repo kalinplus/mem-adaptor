@@ -1,13 +1,13 @@
 [
   {
     "ump": "1.0",
-    "id": "urn:ump:qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+    "id": "urn:ump:i4qddchtghm45k3wcgh2alzcsh326qn4",
     "kind": "semantic",
     "body": {
       "text": "# 合成标题\n\nKeep this body unchanged.\n",
       "structured": {
         "mem_adaptor": {
-          "canonical_id": "qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x",
+          "canonical_id": "i4qddchtghm45k3wcgh2alzcsh326qn4",
           "source": {
             "system": "markdown",
             "adapter_version": "0.1.0",
