@@ -115,9 +115,10 @@ JSON 规范化（JSON Canonicalization Scheme），`records` 是按 `canonical_i
 **摘要的全部输入都写在计划报告里**，所以 conformance 执行器
 不用 import 引擎就能独立重算。时间戳、运行 id 不进摘要，否则同一计划重跑摘要会变。
 
-**`canonical_id`** = `sha256(source.system ‖ 0x00 ‖ source_record_id)` 取前 20 字节，
-转无 padding 的小写 base32，共 32 字符。
-确定性派生，同一条源记录重跑得到同一个 id，所以 OKF 家的文件名（DEC-19）跨次稳定。
+**`canonical_id`** = `sha256(source.system ‖ 0x00 ‖ satellite_id ‖ 0x00 ‖ source_record_id)` 取前 20 字节，
+转无 padding 的小写 base32，共 32 字符（卫星维度按 Issue #22 增加，见 design.md DEC-20）。
+直迁模式 `satellite_id` 为空串、仍参与哈希。确定性派生，同一条源记录重跑得到同一个 id；家模式下 id 只在首次
+从卫星读入时计算，从家读回时按 `mem_adaptor:` 扩展块恢复、不重算（DEC-20），OKF 家的文件名（DEC-19）跨次稳定。
 源里没有 id 的记录，`source_record_id` 按 Reader 规定取：Markdown 用相对路径，Prompt 抽取文本用归一化后的行内容哈希
 （这一类内容一改就成了新记录，计划报告里会显示为一增一删，见 §4 M5）。
 
@@ -272,12 +273,20 @@ OKF 家能被 reader-markdown 读回，且读回的 canonical 记录与写入前
 
 - `mem-adaptor init <家目录>`：建 DEC-19 目录骨架，询问闸门策略（默认放行，并说明后果），写 `.mem-adaptor/config.toml`；
   提示「家目录推到公开远端等于公开全部记忆」。不替用户 `git init`，只提示。
+  卫星登记表不在 init 写入，只在 apply 批准后追加进 config（design.md DEC-20）。
 - `mem-adaptor plan <源> --home <家目录>`：家模式下目标、策略、旧回执都从家目录取；回执存到
-  `.mem-adaptor/receipts/<卫星>/<运行 id>.json`（DEC-19），计划报告存到同级的 `.mem-adaptor/plans/<卫星>/<运行 id>.json`
-  （DEC-19 的目录约定里没有列计划报告，这是本计划补的）。
+  `.mem-adaptor/receipts/<卫星 ID>/<运行 id>.json`（DEC-19），计划报告存到同级的 `.mem-adaptor/plans/<卫星 ID>/<运行 id>.json`
+  （DEC-19 的目录约定里没有列计划报告，这是本计划补的）。旧回执归属按卫星 ID 核对，
+  替代 `crates/core/src/engine.rs:266-269` 的绝对路径比较；直迁保留 location 比较（DEC-20）。
+- 卫星解析顺序、短编号派生、登记表写入时机与搬家检测按 design.md DEC-20；家目录编辑策略与四种变化规则按
+  DEC-21（含 OKF Reader/Writer 归属判断修复：归属按扩展块存量证据，不再按值相等猜测）。
 - 直迁：首次运行询问策略，写入用户级配置 `~/.config/mem-adaptor/config.toml`。
 - `apply` 里集中处理人要决定的事（D1 实际只有 DNA 类 `unresolved`）；非交互运行时这些条目保持不写，并在回执里列出。
 - 退出码区分：成功、有 `rejected`/`unresolved`、拒写（摘要不一致）、错误。
+- `schema/config.schema.json` 变更方案（随 M6 实施；canonical-record / plan-report / receipt-report 与 vectors
+  的变更见 design.md DEC-21 后果 E）：顶层新增可选 `satellites` 数组，每项为
+  `{id（pattern "^[a-z2-7]{8}$"）, label, path（可选）, system, created_at（date-time）}`、
+  `additionalProperties: false`；顶层 `required` 不变（直迁的用户级配置没有 `satellites`）。
 
 验收：用 tuistory（终端交互测试工具）跑一遍 `init` 与交互式 `apply`；非交互模式（stdin 非 TTY）下不卡住、按默认放行并标注来源。
 
