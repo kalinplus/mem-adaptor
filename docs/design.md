@@ -533,7 +533,7 @@ Writer 负责生成目标 id 并**在回执报告里记下映射**（源 id ↔ 
 | 上次 `verified`，这次回读发现目标里没了 | 视为用户在目标侧删除，`omitted`，原因 `deleted_in_target`，**不重写**（防复活） |
 | 上次是 `unverifiable` 的目标（网页粘贴） | 无法判断是否被删，计划报告提示用户自己确认 |
 | 簇在上次报告里有裁决 | 沿用裁决，不再询问 |
-| 目标正文或 canonical 元数据被用户改动 | `unresolved target_modified`，不自动覆盖 |
+| 目标正文或 canonical 元数据被用户改动 | `unresolved target_modified`，不自动覆盖；家模式（OKF 家目标）下本行由 DEC-21 取代——可解析的用户编辑不落在 `target_modified`，按字段级规则与四规则处置（可能是 `omitted home_modified`，双边不同则是冲突候选 `unresolved`），其余目标维持 `target_modified` |
 | 目标同名条目存在但无历史依据 | `unresolved target_untracked`，不自动覆盖 |
 
 M3 已确认：最新回执的 `prior_write` 携带此前真实写入与验证；本次 skipped 条目不写本次 verification。
@@ -593,9 +593,9 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
   home/                              # 一个 git 仓库
     index.md                         # 只放 okf_version: "0.2"，正文按 scope 分组列出记忆
     log.md                           # 每次汇总一条：日期、卫星、增/改/弃计数
-    .mem-adaptor/config.toml         # init 时写入：闸门策略（DEC-1）等
+    .mem-adaptor/config.toml         # init 时写入：闸门策略（DEC-1）等；卫星登记表在 apply 批准后追加（DEC-20）
     memories/<canonical_id>.md       # 平铺；路径即 Concept ID，不编码 scope 等可变属性
-    .mem-adaptor/receipts/<卫星>/<运行 id>.json   # 回执报告，随家走（换机器不丢防复活状态）
+    .mem-adaptor/receipts/<卫星 ID>/<运行 id>.json   # 回执报告，随家走（换机器不丢防复活状态）；卫星身份见 DEC-20
   ```
 
 - **字段落位**：能用 OKF 标准字段的就用标准字段，其余进一个命名空间扩展块；
@@ -609,7 +609,7 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
   | `source.*` / `source_locator` / 源 actor | `sources: [{id, resource, author, last_modified}]` |
   | `updated_at`（源侧） | `generated.at`；`generated.by` 写**源侧作者**（用户手写的用 `human:`），不写我们 |
   | 裁决落选、人决定弃用 | `status: deprecated` |
-  | 其余（`scope`、`scope_qualifier`、`owner_declared`、`dna_class`、`source_record_id`、`evidence_level`、`consent.*`、embedding 的 `model`/`dim`、`conflict_cluster_id`） | 扩展块 `mem_adaptor:` |
+  | 其余（`source.satellite_id`（M6 新增，DEC-20）、`scope`、`scope_qualifier`、`owner_declared`、`dna_class`、`source_record_id`、`evidence_level`、`consent.*`、embedding 的 `model`/`dim`、`conflict_cluster_id`） | 扩展块 `mem_adaptor:` |
 
 - **不写 `verified`**：OKF 的 `verified` 表示「对照来源确认过内容」，而用户批准一次迁移
   不等于核实了每条事实。写了会让 Consumer 把它算成 human-reviewed 级，属于夸大可信度。
@@ -618,6 +618,175 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
 - **固定 OKF 版本**：根 `index.md` 声明 `okf_version`，Writer 按声明的版本写；
   OKF 升版时由 Writer 生成一次「旧版 → 新版」的计划报告，像普通迁移一样审批后执行。
 - **家和回执都是敏感数据**：家目录推到公开远端等于公开全部记忆，文档和 CLI 首次运行要明确提示。
+- **卫星身份与家编辑规则**：卫星编号的发放、登记与回执绑定见 DEC-20，家目录里用户编辑的归属与四种变化规则见 DEC-21；本节的目录约定与字段落位保持有效。
+
+### DEC-20. 卫星 ID 身份契约：身份锚定卫星编号，不锚定路径
+
+**证据**（#19 试点 review 包，见 [PR #20 评论](https://github.com/kalinplus/mem-adaptor/pull/20#issuecomment-6029980022)，探针复现）：
+
+- **同名路径撞身份**（R4）：`canonical_id` 现由 `(system, source_record_id)` 两段派生
+  （`crates/core/src/engine.rs:38-46`、`crates/core/src/reader.rs:37`），本地 Markdown 的 `source_record_id` 是相对路径。
+  两个 vault 里同路径笔记身份相同；第二颗卫星汇入同一个家时，条目变成 `unresolved target_untracked`，
+  或带旧回执被 `Previous receipt belongs to another source` 拒绝。结果是保守拒绝不是静默覆盖，但多卫星汇总被卡死。
+- **回执按绝对路径绑定**：旧回执归属核对是 `receipt.source.location == source.root` 的字符串比较
+  （`crates/core/src/engine.rs:266-269`）。源目录一搬家，更新、防复活、裁决复用（DEC-18）的历史链全部丢失。
+- **`scope_qualifier` 没有卫星维度**：R11 曾嵌入绝对路径，#21/PR #23 改为相对父目录
+  （`crates/reader-markdown/src/lib.rs:158-174`），跨卫星的同名项目仍然无法区分。
+- **导出包路径天然不稳定**：ChatGPT / Claude 的 ZIP 每次下载路径都不同，按路径锚定身份等于每次导出都是新源。
+
+**理由**：身份需要一个不随目录移动而变、又能区分同名来源的锚点，路径两样都不满足。
+卫星编号（satellite ID）由家的登记表发放一次、永不改变，路径只是当前可解析的绑定，可随时重绑。
+登记表放家里随家走，与 DEC-19「回执存家里」一致；它只是绑定登记，不是治理账本——
+只记 id ↔ 标签 ↔ 路径，不记迁移状态，状态仍全部在回执里（DEC-18）。
+
+**后果**：
+
+1. **身份公式**（替代 [implementation-plan.md](implementation-plan.md) §2 的两段公式）：
+   `canonical_id = sha256(system ‖ 0x00 ‖ satellite_id ‖ 0x00 ‖ source_record_id)`，取前 20 字节转无 padding 的
+   小写 base32（RFC 4648 Base32 编码），共 32 字符；schema 的 `^[a-z2-7]{32}$` pattern 不变，变的是派生输入。
+   直迁模式 `satellite_id` 为空串、仍参与哈希（统一公式，不做条件分支），因此直迁的 id 值也与旧公式不同。
+   项目未发布：已写过的家与全部测试 golden 重新生成，不做兼容。
+2. **id 只算一次，随记录走**：`canonical_id` 只在第一次从卫星读入时计算；canonical 记录新增可选字段
+   `source.satellite_id`（直迁缺省），随记录存进家里的 `mem_adaptor:` 扩展块。从家读回时以扩展块存量为准，
+   **不重算**——`crates/core/src/okf.rs:79-83` 的重算核对删除，代之以 schema 格式校验和与该记录所属卫星链的一致性核对。
+   家本身不领卫星编号；家记录保留其原卫星的编号。
+3. **短编号格式与生成**（Issue #22 待设计项，本条定案）：
+   - 字符集 `[a-z2-7]`，与 `canonical_id` 同一字母表（无 0/1/8/9 形近字符）；定长 8 字符（2^40 空间），
+     是安全的单路径段，且定长 8 位不会撞上 Windows 保留设备名（CON、COM1 等）。
+   - 生成是确定性派生：`satellite_id = base32(sha256("mem-adaptor:satellite:v1" ‖ 0x00 ‖ <首次登记时的规范化绝对路径>)[..5])`
+     转小写。域分离前缀避免与其他哈希互撞；不含时间戳，所以同一未登记路径在 plan 与 apply 两阶段派生出同一候选 id，
+     计划摘要稳定（DEC-3）。
+   - **同一家内不重复由登记表保证，不靠概率**：写入前与登记表全部现有 id 核对；派生 id 已被别的路径占用时
+     按第 6 条的搬家/复用流程处理，不静默换号。
+   - 另有显示标签（label）：可改、只用于展示，默认取登记时的目录名，直接编辑登记表即可；不进任何哈希，不要求唯一。
+4. **登记表**：`.mem-adaptor/config.toml` 新增卫星条目（`id`、`label`、`path` 可选、`system`、`created_at`）。
+   **只在 apply 批准后写入，plan 阶段只读不写**（dry-run 不落盘，DEC-11）。导出包类卫星没有 `path`。
+5. **解析顺序**：显式 `--satellite <ID>` > 登记表按当前路径匹配 > 派生候选新 id。同一路径再次汇总自动命中登记表；
+   源目录搬家后用 `--satellite <ID>` 重绑登记表路径。导出包类来源（ChatGPT / Claude 的 ZIP）每次必须显式 `--satellite`：
+   已有编号延续旧链，`--satellite new` 新建卫星（label 默认取文件名，不登记 path）。
+   能否按导出内的账号标识自动匹配卫星，等 M7 用真实导出核实后再议（§6 Q10）。
+6. **搬家检测与「大部分吻合」判定标准**（Issue #22 待设计项，本条定案）：新路径未登记、派生出候选 id 时触发。
+   对每颗已有卫星的最近一份有效回执：单条「吻合」= `source_record_id` 相同且 `content_hash` 相同；
+   若 `吻合条数 ÷ 本轮新源记录条数 ≥ 0.6` 且 `吻合条数 ≥ 5`，判定为疑似搬家/路径复用。
+   交互模式警告并要求用户在「重绑到该卫星」与「作为新卫星继续」之间确认；非交互模式拒绝，提示先用 `--satellite <ID>`。
+   **只提示，不自动合并**。少于 5 条的小源不触发提示，重复内容由去重聚类兜底、交人裁决（DEC-6）。
+7. **回执按卫星 ID 绑定**：家模式下旧回执归属核对改为 `receipt.source.satellite.id == 当前卫星 ID`，
+   替代 `crates/core/src/engine.rs:266-269` 的绝对路径比较；`source.location` 保留为展示与审计字段。
+   直迁没有卫星，location 比较照旧，行为与现在一致。回执目录 `.mem-adaptor/receipts/<卫星 ID>/` 不变（DEC-19）。
+8. **Claude Code 的 `scope_qualifier`** = `<卫星 ID>/<相对父目录>`（父目录为空时只有卫星 ID；
+   直迁维持现状的相对父目录）。该值写入扩展块、从家读回时恢复，不随恢复重算。
+9. 与 [m6-cli-proposal.md](m6-cli-proposal.md) §2 的关系：显式 `--satellite`、回执/计划按卫星分目录的推荐保留；
+   其中「不会因此修改已确认的 canonical id 算法」一句被本 DEC 取代（Issue #22 用户确认），
+   「安全的单路径段标识」落实为第 3 条的 8 字符 base32。
+
+### DEC-21. 家目录编辑策略：归属按扩展块存量证据，四种变化规则按上次写入基准
+
+**证据**（#19 R1，[PR #20 试点 review 包](https://github.com/kalinplus/mem-adaptor/pull/20#issuecomment-6029980022)探针复现）：
+
+- 在家里改正文（原笔记有 `title` 时）：整个计划失败于 `Conflicting original and envelope source metadata`
+  （`crates/core/src/reader.rs:260-263` 的 `source_extra` 合并冲突）；无 `title` 时不失败，但 Writer 自己生成的旧标题
+  被误列为 `source_unknown` 未知字段。改 `tags`：整个计划失败——`okf::validate_projection` 要求 frontmatter
+  等于派生值（`crates/core/src/okf.rs:125-134`），Reader 在 `crates/reader-markdown/src/lib.rs:93` 调用它，
+  Writer 侧 `inspect` 也走同一校验（`crates/writer-okf/src/lib.rs:396-416`）。改 `title`：被误报为「来源未知字段」
+  ——`crates/reader-markdown/src/lib.rs:108-110` 只在值等于派生值时才映射该字段。
+- 变异测试佐证：正文变更判断的 `!=` → `==` 变异存活（review 基线 443e799 的 `lib.rs:88:36`，
+  现对应 `crates/reader-markdown/src/lib.rs:94`）——没有任何测试编辑过家目录正文。
+- 根因是同一个：**字段归属靠猜**——「当前值是否等于由当前 canonical 记录派生的值」（`native_projection`，
+  `crates/core/src/okf.rs:101-122`）。派生值随正文变化漂移，猜测机制随即失效，用户编辑被当成损坏数据或未知字段。
+
+**理由**：归属不能靠猜，要靠存量证据。`mem_adaptor:` 扩展块本来就存着整条 canonical 记录
+（除正文外，`crates/writer-okf/src/lib.rs:244-245, 284`）：`tags`、`sources` 各字段、`generated` 的「工具写入值」
+直接由扩展块存量给出或唯一确定；正文变化有扩展块 `content_hash` 这个独立判据。唯一有歧义的是 `title`
+（由正文派生，正文被编辑后分不清「用户改的」与「正文更新后残留的工具旧值」）——但两种情形的处置完全一致
+（保留、不覆盖），歧义不影响任何决定，所以不需要另存字段快照。家的定位已确认为可维护的主库
+（Issue #22，2026-10-07）：用户的正常内容更新必须被保护，四种变化规则已确认；本 DEC 把它们落实为可判定的
+字段规则与比较基准。边界不变：**受管文件解析失败仍整体失败**（损坏的受管声明不能静默跳过，
+[m4-reader-proposal.md](m4-reader-proposal.md) 契约）；**可解析的用户编辑**走下面的字段级规则，
+单文件编辑不中止整个计划，也不静默丢弃。
+
+**后果**：
+
+**A. 字段级规则**（家读回时的归属判据与处置；归属判据取代值相等猜测）：
+
+| 字段 | 归属判据（与扩展块存量比较） | 用户改动的处置 |
+|---|---|---|
+| 正文 | `content_hash(body)` ≠ 扩展块记录的 `content_hash`（现有 `okf_body_changed` 异常保留，`crates/reader-markdown/src/lib.rs:94-97`） | **新事实**：读回采用家正文，`content_hash` 以家值为准；是否写回家由 B 的四规则决定 |
+| `tags` | frontmatter 值 ≠ 扩展块记录的 `tags`（无歧义） | **新事实**：读回的 `canonical.tags` 取家当前值；卫星侧也改 → 冲突候选，不自动并集 |
+| `title` | 不等于由正文派生的显示值（`crates/core/src/writer.rs:36-40`） | **只提示、粘性保留**：纯展示字段（canonical 无 title 字段），一律当用户显示值处理，不区分残留旧值；不进 unmapped/`source_extra`（修复 R1 误报），不失败；后续批准更新也不以派生值覆盖，直到用户改回派生值或删除 |
+| `sources` / `generated` | frontmatter 值 ≠ 由扩展块字段（`source_record_id`、`source_locator`、`provenance.actor`、`updated_at`）派生的值（无歧义） | **只提示、不采纳**：溯源是事实记录，不是用户可创作的内容；canonical 以扩展块为准，文件当前值保留不覆盖（粘性），报告列异常 |
+
+`mem_adaptor:` 扩展块是工具专属区，用户改动分三种情况：
+
+- **整体删除**：文件降级为用户普通笔记（新身份，按普通 Markdown 读取）；原卫星链中该 `canonical_id` 的条目
+  在计划报告列为 `unresolved target_unmanaged`（新原因：目标已脱管），不自动覆盖、不自动写回，交人裁决。
+- **修改后仍能通过 schema 校验**：以恢复值为准读回；引擎按回执链核对——`canonical_id` 不在任何链中按
+  `target_untracked` 处理，在链中则作为「家变了」进入 B 的四规则。
+- **修改到校验不过**（可解析但 schema/一致性不通过）：记异常 `managed_envelope_invalid`，该文件在计划报告中
+  列为 `unresolved` 条目，其余文件与整个计划继续。YAML 解析级失败维持现有行为：整体失败。
+
+**B. 四种变化规则与回执契约**（比较基准 = 该卫星最近一份有效回执中该条目的 `prior_write`；
+不新增状态账本，也不新增回执字段）：
+
+- 「**卫星变了**」：本轮卫星侧 canonical 记录的 `record_hash` ≠ `prior_write.record_hash`。
+- 「**家变了**」：家文件当前整文件字节哈希 ≠ `prior_write.target_hash`（`target_hash` 已经是整文件字节哈希，
+  `crates/writer-okf/src/lib.rs:418-424`）。字段级定位只用于报告展示，用 A 的归属判据得出。
+
+| 卫星 vs 上次写入 | 家 vs 上次写入 | 处置 |
+|---|---|---|
+| 没变 | 没变 | `omitted already_migrated`，不重复写入 |
+| 变了 | 没变 | 列入更新计划（列出新旧 `record_hash`），批准后写入家 |
+| 没变 | 变了 | `omitted home_modified`（新原因）：保留家的修改，不写入；报告列出被改字段（`home_changed_fields`，载体与理由见后果 E）；不算失败 |
+| 变了 | 变了且双方不同 | **冲突候选**：保留双方候选值，`unresolved`，由人裁决，不自动合并（铁律 7） |
+| 变了 | 变了但家当前状态与本轮卫星投影完全一致（整文件字节哈希相等） | `omitted already_migrated`（已收敛，无需写入） |
+
+- **比较按记录级，不做字段级合并**：字段级合并就是自动合并（铁律 7 禁止），所以即使双方改动落在不同字段
+  （如家改 `tags`、卫星改正文），也进冲突清单由人二选一，不自动拼装。
+- **基准不随跳过推进**：家只变的轮次不发生写入，`prior_write` 不推进。这是有意的——只有批准写入才推进基准，
+  否则「家先改、卫星后改」会被洗成「只有卫星变」而覆盖用户编辑。
+- **裁决**：每簇两个候选（卫星值 / 家值）。取卫星值 = 批准后写入；取家值 = 回执把家当前状态记为新的
+  `prior_write`（回读验证 `verified`，字节不变）。裁决结果写进回执 `verdicts`，重跑沿用（DEC-6、DEC-18）。
+- **删除语义另议**（§6 Q6）：卫星缺席与家文件删除都不当空正文，`source_missing` 与 `deleted_in_target`
+  防复活照旧（§0 增量汇总、DEC-18）。
+- 跨卫星共享产物（`index.md` / `log.md`）的对账按 [m6-cli-proposal.md](m6-cli-proposal.md) §1 已确认的推荐执行，本 DEC 不重复。
+
+**C. 冲突候选的呈现**：复用 DEC-6 的 `conflict_cluster_id` / `conflict_candidates` 结构，簇 basis 为
+「上次写入后双方变化且不同」；每个候选列出来源（卫星 ID + 标签 / 家文件路径）、`content_hash`、`record_hash`。
+报告不含正文（DEC-1），要看内容由用户按 locator 自行打开文件。交互式 `apply` 逐簇列出由用户选择；
+非交互模式这些条目保持不写并列进回执（M6 退出码约定：`unresolved` 不算成功）。
+
+**D. 实现侧约束**：`okf::validate_projection` 与 Writer 的 `inspect`（`crates/writer-okf/src/lib.rs:396-416`）
+从「发散即失败」改为「归属分类」；所有权检查、目标快照与审批时重核（同文件 `:254-264`，批准后目标变化 → 拒写）
+的语义不变，用户编辑的发散判断从 Reader/Writer 失败前移到引擎的四规则比较。
+
+**E. schema 变更方案**（正本届时随实现 Issue 修改，本设计轮不动 `schema/`）：
+
+- `schema/canonical-record.schema.json`：`$defs/canonical_id` 的 pattern `^[a-z2-7]{32}$` **不变**，
+  变的是派生公式（DEC-20 第 1 条），公式不在 schema 里表达；`$defs/source_identity` 新增可选
+  `satellite_id`（`{"type": "string", "pattern": "^[a-z2-7]{8}$"}`），`required` 列表不变（直迁缺省）。
+- `schema/plan-report.schema.json`：
+  - `$defs/source` 新增可选 `satellite` 对象（`{"id": pattern ^[a-z2-7]{8}$, "label": 非空字符串}`，
+    `additionalProperties: false`，`required: ["id"]`）；`location` 保留为展示与审计字段，直迁缺省 `satellite`。
+  - `$defs/omission_reason` 扩展 `home_modified`（B 表「只有家变」）。现有各分支 `additionalProperties: false`
+    且无载荷分支的枚举是封闭的，必须显式加：`home_modified` **单独成一个带载荷的分支**
+    `{"required": ["code", "home_changed_fields"], "properties": {"code": {"const": "home_modified"},
+    "home_changed_fields": {"type": "array", "minItems": 1, "items": pointer}}, "additionalProperties": false}`。
+    `home_changed_fields` 就是 B 表「报告列出被改字段」的载体：用户在家改动的 canonical 字段路径清单，
+    由 A 的归属判据得出。**放 omission 分支而不是 anomalies 的理由**：`omission_reason` 的 oneOf 已有按原因
+    带载荷的先例（`duplicate_of` 带 `canonical_id`、`target_unsupported` 带 `field`、`verdict_excluded` 带
+    `cluster_id`），条目自带 `target_map` 定位家文件，报告自包含；`anomaly` 结构是源侧取向的
+    （`source_locator`/`line`），不适合承载目标侧字段变化。字段清单随条目 disposition 进计划摘要
+    （digest_inputs 的 predictions），审批绑定的就是用户看到的被改字段（DEC-3）。
+  - `$defs/unresolved_reason` 的无载荷分支枚举加 `target_unmanaged`（A 的扩展块「整体删除」态），
+    不带附加载荷——条目的 `target_map` 已足够定位。
+- `schema/receipt-report.schema.json`：无结构变更——其 `source` 与 `disposition` 都 `$ref` plan-report 的
+  `$defs`（`receipt-report.schema.json:14, :37`），上述枚举与分支扩展自动生效；`prior_write` 也不加字段
+  （`target_hash` 已覆盖整文件，见 B）。
+- `schema/config.schema.json`：变更方案文字见 [implementation-plan.md](implementation-plan.md) M6。
+- `schema/vectors/`：`valid/canonical-full.json` 补 `source.satellite_id`；`valid/plan.json`、`valid/receipt.json`
+  的 `source` 补 `satellite`，并各补一条 `omitted home_modified`（含 `home_changed_fields`）与一条
+  `unresolved target_unmanaged` 条目；`valid/config.json` 补 `satellites`；`invalid/cases.json` 补反例
+  （`satellite_id` 非法字符集/长度、`satellite` 缺 `id`、`satellites` 条目缺字段、`home_modified` 缺
+  `home_changed_fields`），并注明各自违反哪条约束。
 
 ## 5. 明确不做的事
 
@@ -650,6 +819,7 @@ conformance、无 normative 依赖）。这验证了我们的定位策略——*
 | Q7 | 定位：一次性搬家，还是加上持续同步 | DEC-19 | 已定：家模式，默认 OKF 目录 |
 | Q8 | 家 → 卫星的分发（双向同步） | DEC-19 | 已定：MVP 不做，以后再议 |
 | Q9 | 远程去向（Mem0 云、网页粘贴、opt-in 远程模型）是否单独一档闸门策略、默认拦截 | DEC-1 | 未定：MVP 一个策略管所有去向，D2–3 接 Mem0 Writer 时再议 |
+| Q10 | 导出包类来源能否按导出内的账号标识自动匹配卫星 | DEC-20 | 未定：等 M7 用真实导出核实后再议；当前每次显式 `--satellite` |
 
 ## 7. 证据索引
 
@@ -672,3 +842,4 @@ conformance、无 normative 依赖）。这验证了我们的定位策略——*
 | Claude/Gemini 导入是粘贴文本、Anthropic 官方 Prompt 格式、ChatGPT 无导入 | [ecosystem.md](ecosystem.md) 的「平台原生导入通道」；[source-memory-formats.md](source-memory-formats.md) |
 | 三类形态（文件式/数据库式/图谱式） | [memory-products.md](memory-products.md) |
 | OKF v0.2：只有 `type` 必需、扩展字段须保留不拒收、git 分发、Concept ID 即路径、v0.1→v0.2 破坏性变更 | `lab/upstream/open-knowledge-format/SPEC.md` §2、§3、§4.1、§5、§7、§9、§11、§13.1 |
+| R1 家编辑探针（正文/tags/title 三症状）、R4 同名路径身份冲突、R11 绝对路径 `scope_qualifier`、`88:36` 存活变异 | [PR #20 试点 review 包](https://github.com/kalinplus/mem-adaptor/pull/20#issuecomment-6029980022)；GitHub Issue #19、#21、#22 |
