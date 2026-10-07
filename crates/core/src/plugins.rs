@@ -84,6 +84,12 @@ pub struct ReadBack {
     pub record: CanonicalRecord,
 }
 
+/// Holds one phase-local observation; an untracked native payload may have a hash without a canonical record.
+pub struct TargetState {
+    pub record: Option<CanonicalRecord>,
+    pub target_hash: Option<String>,
+}
+
 pub trait Writer {
     fn id(&self) -> &'static str;
     fn version(&self) -> &'static str;
@@ -95,6 +101,28 @@ pub trait Writer {
     fn read_back(&self, written: &[Written]) -> Result<Vec<ReadBack>>;
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>>;
     fn target_hash(&self, target_id: &str) -> Result<Option<String>>;
+    /// Inspects a collection within one phase; overrides may parse once but must not cache across execution boundaries.
+    fn inspect_many(&self, target_ids: &[String]) -> Result<BTreeMap<String, TargetState>> {
+        target_ids
+            .iter()
+            .map(|id| {
+                Ok((
+                    id.clone(),
+                    TargetState {
+                        record: self.inspect(id)?,
+                        target_hash: self.target_hash(id)?,
+                    },
+                ))
+            })
+            .collect()
+    }
+    /// Rechecks native hashes after read-back without relying on an earlier inspection snapshot.
+    fn target_hashes(&self, target_ids: &[String]) -> Result<BTreeMap<String, Option<String>>> {
+        target_ids
+            .iter()
+            .map(|id| Ok((id.clone(), self.target_hash(id)?)))
+            .collect()
+    }
     fn artifacts(&self, target_ids: &[String]) -> Result<Vec<crate::reports::TargetArtifact>>;
     fn shared_artifact_paths(&self) -> &'static [&'static str];
 }

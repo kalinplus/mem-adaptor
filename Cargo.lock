@@ -572,6 +572,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "tempfile",
+ "time",
  "tracing",
  "tracing-subscriber",
  "zip",
@@ -646,6 +647,7 @@ dependencies = [
  "jsonschema",
  "mem-adaptor-core",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

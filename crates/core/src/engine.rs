@@ -50,7 +50,7 @@ pub fn timestamp() -> Result<String> {
     Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
 }
 
-/// Hashes the JCS serialization of records, target state, writers, and gate policy for approval binding.
+/// Hashes records, target state, writers, policy, and the complete historical snapshot for approval binding.
 /// Callers supply deterministically ordered arrays; JCS orders object keys, not array elements.
 /// Report run IDs and generation times are outside DigestInputs and therefore do not affect this hash.
 /// Serialization or unsafe-number errors propagate; this helper does not approve a plan or inspect targets.
@@ -256,9 +256,11 @@ impl Engine {
                 "Sensitive source filename cannot be exposed in a report"
             );
         }
+        let mut previous_receipt_hash = None;
         let previous = previous_ref
             .map(|path| -> Result<ReceiptReport> {
-                let receipt: ReceiptReport = serde_json::from_slice(&fs::read(path)?)
+                let bytes = fs::read(path)?;
+                let receipt: ReceiptReport = serde_json::from_slice(&bytes)
                     .map_err(|_| anyhow::anyhow!("Invalid previous receipt JSON or fields"))?;
                 crate::schema::validate("receipt-report", &receipt)?;
                 ensure!(
@@ -280,6 +282,23 @@ impl Engine {
                         .all(|entry| keys.insert((&entry.target, &entry.canonical_id))),
                     "Duplicate identity in previous receipt"
                 );
+                let mut targets = BTreeSet::new();
+                ensure!(
+                    receipt
+                        .targets
+                        .iter()
+                        .all(|target| targets.insert(&target.id)),
+                    "Duplicate target in previous receipt"
+                );
+                ensure!(
+                    receipt
+                        .entries
+                        .iter()
+                        .all(|entry| targets.contains(&entry.target)),
+                    "Previous receipt entry lacks a target declaration"
+                );
+                // The entire loaded snapshot is an execution dependency, not just current-source predictions.
+                previous_receipt_hash = Some(content_hash(&bytes));
                 Ok(receipt)
             })
             .transpose()?;
@@ -625,6 +644,23 @@ impl Engine {
                     capabilities: writer.capabilities(),
                 },
             );
+            let mut inspection_ids = BTreeSet::new();
+            for record in records.values() {
+                inspection_ids.insert(writer.plan(record, None)?.target_id);
+                if let Some(old) =
+                    previous_entries.get(&(target.clone(), record.canonical_id.clone()))
+                {
+                    if let Some(prior) = &old.prior_write {
+                        inspection_ids.insert(prior.target_id.clone());
+                    }
+                    if let Some(reference) = &old.duplicate_write {
+                        inspection_ids.insert(reference.prior_write.target_id.clone());
+                    }
+                }
+            }
+            // This snapshot is confined to planning; apply recomputes it before issuing the capability.
+            let target_states =
+                writer.inspect_many(&inspection_ids.into_iter().collect::<Vec<_>>())?;
             let mut batch = Vec::new();
             for record in records.values() {
                 let previous_entry = previous_entries
@@ -648,23 +684,24 @@ impl Engine {
                     if prior.verification == Verification::Verified
                         && writer.capabilities().read_back
                     {
-                        match writer.inspect(&prior.target_id)? {
+                        let state = target_states
+                            .get(&prior.target_id)
+                            .context("Missing target inspection")?;
+                        match state.record.clone() {
                             None => {
-                                planned.disposition =
-                                    if writer.target_hash(&prior.target_id)?.is_some() {
-                                        Disposition::Unresolved {
-                                            reason: UnresolvedReason::TargetModified,
-                                        }
-                                    } else {
-                                        Disposition::Omitted {
-                                            reason: OmissionReason::DeletedInTarget,
-                                        }
+                                planned.disposition = if state.target_hash.is_some() {
+                                    Disposition::Unresolved {
+                                        reason: UnresolvedReason::TargetModified,
                                     }
+                                } else {
+                                    Disposition::Omitted {
+                                        reason: OmissionReason::DeletedInTarget,
+                                    }
+                                }
                             }
                             Some(actual)
                                 if record_hash(&actual)? != prior.record_hash
-                                    || writer.target_hash(&prior.target_id)?.as_ref()
-                                        != Some(&prior.target_hash) =>
+                                    || state.target_hash.as_ref() != Some(&prior.target_hash) =>
                             {
                                 planned.disposition = Disposition::Unresolved {
                                     reason: UnresolvedReason::TargetModified,
@@ -710,7 +747,11 @@ impl Engine {
                 } else if matches!(
                     planned.disposition,
                     Disposition::Accepted | Disposition::Transformed { .. }
-                ) && writer.target_hash(&planned.target_id)?.is_some()
+                ) && target_states
+                    .get(&planned.target_id)
+                    .context("Missing target inspection")?
+                    .target_hash
+                    .is_some()
                 {
                     planned.disposition = Disposition::Unresolved {
                         reason: UnresolvedReason::TargetUntracked,
@@ -752,8 +793,11 @@ impl Engine {
                         if let Some(record) = projected.get(&reference.canonical_id) {
                             record.clone()
                         } else {
-                            writer
-                                .inspect(&reference.prior_write.target_id)?
+                            target_states
+                                .get(&reference.prior_write.target_id)
+                                .context("Missing duplicate inspection")?
+                                .record
+                                .clone()
                                 .context("Duplicate target disappeared")?
                         };
                     if duplicate_key(&representative)? == duplicate_key(&planned.record)? {
@@ -766,7 +810,12 @@ impl Engine {
                         }
                     } else {
                         planned.duplicate_write = None;
-                        if writer.target_hash(&planned.target_id)?.is_some() {
+                        if target_states
+                            .get(&planned.target_id)
+                            .context("Missing target inspection")?
+                            .target_hash
+                            .is_some()
+                        {
                             planned.disposition = Disposition::Unresolved {
                                 reason: UnresolvedReason::TargetUntracked,
                             };
@@ -862,6 +911,7 @@ impl Engine {
             targets: targets.clone(),
             writers: writers.clone(),
             gate_policy: gate_policy.clone(),
+            previous_receipt_hash,
         };
         let created_at = timestamp()?;
         let systems: BTreeSet<_> = records
@@ -1114,13 +1164,23 @@ impl Engine {
                 .into_iter()
                 .map(|record| (record.canonical_id, record.record))
                 .collect();
+            // Hashes are read again after read-back, never borrowed from the planning snapshot.
+            let native_hashes = writer.target_hashes(
+                &written
+                    .iter()
+                    .map(|item| item.target_id.clone())
+                    .collect::<Vec<_>>(),
+            )?;
             for (planned, written) in writable.into_iter().zip(written) {
                 ensure!(
                     written.canonical_id == planned.record.canonical_id,
                     "Writer identity mismatch"
                 );
                 ensure!(
-                    writer.target_hash(&written.target_id)?.as_ref() == Some(&written.target_hash),
+                    native_hashes
+                        .get(&written.target_id)
+                        .and_then(Option::as_ref)
+                        == Some(&written.target_hash),
                     "Written native payload changed before verification"
                 );
                 let actual = read_back
@@ -1232,7 +1292,7 @@ impl Engine {
                 {
                     let mut carried = old.clone();
                     carried.disposition = Disposition::Omitted {
-                        reason: OmissionReason::SourceDeleted,
+                        reason: OmissionReason::SourceMissing,
                     };
                     carried.verification = None;
                     entries.push(carried);

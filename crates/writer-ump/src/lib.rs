@@ -1,14 +1,18 @@
 //! Writer for Universal Memory Protocol JSON file targets.
-//! Uses shared fixed-path and regular-file checks at the local target boundary.
+//! Every observation rejects ambiguous raw JSON and validates all explicitly managed bridges.
+//! Bulk observations use one phase-local parse and ID index; foreign native records remain unowned.
 //! Approval and read-back remain engine responsibilities; replacement is per file, not a whole-run transaction.
 
+mod json;
+
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Context, ensure};
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::{CanonicalRecord, Scope};
-use mem_adaptor_core::engine::{content_hash, record_hash, timestamp};
+use mem_adaptor_core::engine::{canonical_id, content_hash, record_hash, timestamp};
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
 use mem_adaptor_core::writer as target;
@@ -23,8 +27,38 @@ static VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
 });
 const FILE: &str = "records.ump.json";
 
+#[cfg(test)]
+thread_local! {
+    static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct UmpWriter {
     location: PathBuf,
+}
+
+struct NativeRecord {
+    value: Value,
+    record: Option<CanonicalRecord>,
+}
+
+#[derive(Default)]
+struct NativeRecords {
+    records: Vec<NativeRecord>,
+    by_id: BTreeMap<String, usize>,
+}
+
+impl NativeRecords {
+    /// Looks up an already validated native record without rescanning the target array.
+    fn get(&self, target_id: &str) -> Option<&NativeRecord> {
+        self.by_id.get(target_id).map(|index| &self.records[*index])
+    }
+}
+
+impl NativeRecord {
+    /// Hashes the complete native payload, including fields outside the canonical bridge.
+    fn target_hash(&self) -> Result<String> {
+        Ok(content_hash(&mem_adaptor_core::jcs::to_vec(&self.value)?))
+    }
 }
 
 impl UmpWriter {
@@ -35,32 +69,50 @@ impl UmpWriter {
         })
     }
 
-    fn native_records(&self) -> Result<Vec<Value>> {
+    /// Reads and validates the complete array once for this observation, without retaining a cross-phase cache.
+    fn native_records(&self) -> Result<NativeRecords> {
         let Some(bytes) = target::read_file(&self.location, FILE)? else {
-            return Ok(vec![]);
+            return Ok(NativeRecords::default());
         };
         parse_records(&bytes)
     }
 }
 
-fn parse_records(bytes: &[u8]) -> Result<Vec<Value>> {
-    let records: Vec<Value> =
-        serde_json::from_slice(bytes).map_err(|_| anyhow::anyhow!("Invalid UMP target array"))?;
-    let mut identities = std::collections::BTreeSet::new();
-    for record in &records {
-        mem_adaptor_core::jcs::validate_numbers(record)?;
+/// Rejects duplicate members and IDs, unsafe numbers, and every broken managed record before returning an index.
+fn parse_records(bytes: &[u8]) -> Result<NativeRecords> {
+    #[cfg(test)]
+    PARSES.with(|count| count.set(count.get() + 1));
+    let Value::Array(values) = json::parse(bytes)? else {
+        anyhow::bail!("Invalid UMP target array");
+    };
+    let mut records = NativeRecords::default();
+    for value in values {
+        mem_adaptor_core::jcs::validate_numbers(&value)?;
         ensure!(
-            VALIDATOR.is_valid(record),
+            VALIDATOR.is_valid(&value),
             "UMP target record fails official schema"
         );
+        let id = value["id"]
+            .as_str()
+            .context("UMP target record lacks identity")?;
         ensure!(
-            identities.insert(record["id"].as_str().unwrap()),
+            records
+                .by_id
+                .insert(id.to_owned(), records.records.len())
+                .is_none(),
             "Duplicate UMP target identity"
         );
+        let record = if value.pointer("/body/structured/mem_adaptor").is_some() {
+            Some(decode(&value)?)
+        } else {
+            None
+        };
+        records.records.push(NativeRecord { value, record });
     }
     Ok(records)
 }
 
+/// Conservatively maps declared kinds without inferring a category from body text or dates.
 pub fn kind(record: &CanonicalRecord) -> &'static str {
     match record.source_kind.as_deref() {
         Some("profile" | "identity") => "identity",
@@ -71,7 +123,43 @@ pub fn kind(record: &CanonicalRecord) -> &'static str {
     }
 }
 
-fn encode(record: &CanonicalRecord, created: &str, created_origin: &str) -> Result<Value> {
+/// Explains known mappings and distinguishes unknown from missing categories without echoing either value.
+fn kind_rule(record: &CanonicalRecord) -> String {
+    match record.source_kind.as_deref() {
+        None => "default_kind_semantic_missing_source_kind".into(),
+        Some(
+            "profile" | "identity" | "instruction" | "procedural" | "episodic" | "working"
+            | "preference" | "project" | "tool" | "project_doc" | "semantic",
+        ) => format!("conservative_kind_{}", kind(record)),
+        Some(_) => "default_kind_semantic_unknown_source_kind".into(),
+    }
+}
+
+/// Checks canonical shape and independently re-derives source identity, body integrity and vector dimensions.
+fn validate_bridge(record: &CanonicalRecord) -> Result<()> {
+    mem_adaptor_core::schema::validate("canonical-record", record)
+        .map_err(|_| anyhow::anyhow!("Invalid UMP migration metadata schema"))?;
+    ensure!(
+        record.canonical_id == canonical_id(&record.source.system, &record.source_record_id),
+        "UMP bridge source identity mismatch"
+    );
+    ensure!(
+        record.content_hash == content_hash(record.content.as_bytes()),
+        "UMP bridge body hash mismatch"
+    );
+    if let Some(embedding) = &record.embedding
+        && let Some(vector) = &embedding.vector
+    {
+        ensure!(
+            vector.len() as u64 == embedding.dim,
+            "UMP bridge vector length does not match dimension"
+        );
+    }
+    Ok(())
+}
+
+/// Projects validated canonical metadata and native fields; creation time describes the first target creation.
+fn project(record: &CanonicalRecord, created: &str, created_origin: &str) -> Result<Value> {
     let mut metadata = serde_json::to_value(record)?;
     metadata.as_object_mut().unwrap().remove("content");
     let owner = format!(
@@ -125,6 +213,17 @@ fn encode(record: &CanonicalRecord, created: &str, created_origin: &str) -> Resu
         }
         native["consent"] = value;
     }
+    Ok(native)
+}
+
+/// Generates a schema-valid native record without silently inventing bridge integrity or creation provenance.
+fn encode(record: &CanonicalRecord, created: &str, created_origin: &str) -> Result<Value> {
+    validate_bridge(record)?;
+    ensure!(
+        matches!(created_origin, "source_record" | "target_migration"),
+        "Invalid UMP target creation origin"
+    );
+    let native = project(record, created, created_origin)?;
     ensure!(
         VALIDATOR.is_valid(&native),
         "Generated UMP record fails official schema"
@@ -132,36 +231,65 @@ fn encode(record: &CanonicalRecord, created: &str, created_origin: &str) -> Resu
     Ok(native)
 }
 
+/// Decodes an officially validated managed record and rejects native projections contradicting its bridge.
+/// The first created time and its origin are preserved independently of later source-created-time corrections.
 fn decode(native: &Value) -> Result<CanonicalRecord> {
-    ensure!(
-        VALIDATOR.is_valid(native),
-        "UMP target record fails official schema"
-    );
     let mut metadata = native
         .pointer("/body/structured/mem_adaptor")
         .context("UMP target lacks migration metadata")?
+        .as_object()
+        .context("UMP migration metadata must be an object")?
         .clone();
-    metadata["content"] = native["body"]["text"].clone();
-    let record: CanonicalRecord = serde_json::from_value(metadata)
+    ensure!(
+        !metadata.contains_key("content"),
+        "UMP migration metadata must not duplicate the native body"
+    );
+    metadata.insert("content".into(), native["body"]["text"].clone());
+    // Validate raw metadata first so explicit null or malformed optional fields cannot disappear during decoding.
+    mem_adaptor_core::schema::validate("canonical-record", &Value::Object(metadata.clone()))
+        .map_err(|_| anyhow::anyhow!("Invalid UMP migration metadata schema"))?;
+    let record: CanonicalRecord = serde_json::from_value(Value::Object(metadata))
         .map_err(|_| anyhow::anyhow!("Invalid UMP migration metadata"))?;
-    mem_adaptor_core::schema::validate("canonical-record", &record)?;
+    validate_bridge(&record)?;
     ensure!(
         native["id"] == format!("urn:ump:{}", record.canonical_id),
         "UMP bridge identity mismatch"
     );
+    let created = native["time"]["created"]
+        .as_str()
+        .context("Invalid UMP target creation time")?;
+    let origin = native
+        .pointer("/body/structured/created_origin")
+        .and_then(Value::as_str)
+        .context("Invalid UMP target creation origin")?;
+    ensure!(
+        matches!(origin, "source_record" | "target_migration"),
+        "Invalid UMP target creation origin"
+    );
+    let expected = project(&record, created, origin)?;
+    for field in ["kind", "scope", "consent", "time", "provenance"] {
+        ensure!(
+            native.get(field) == expected.get(field),
+            "UMP native projection contradicts migration metadata"
+        );
+    }
     Ok(record)
 }
 
 impl Writer for UmpWriter {
+    /// Identifies this local UMP file adapter in plans and approvals.
     fn id(&self) -> &'static str {
         "ump"
     }
+    /// Records the actual Writer package version rather than the native UMP format version.
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+    /// Exposes the target root fixed before approval.
     fn location(&self) -> &Path {
         &self.location
     }
+    /// Declares canonical preservation through the UMP extension slot and verified update support.
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             supported_fields: target::fields(),
@@ -187,11 +315,7 @@ impl Writer for UmpWriter {
             target_map: vec![
                 target::mapping("/canonical_id", "/id", "urn_ump_reversible_base32"),
                 target::mapping("/content", "/body/text", "body_bytes_unchanged"),
-                target::mapping(
-                    "/source_kind",
-                    "/kind",
-                    &format!("conservative_kind_{}", kind(record)),
-                ),
+                target::mapping("/source_kind", "/kind", &kind_rule(record)),
                 target::mapping(
                     "/created_at",
                     "/time/created",
@@ -219,6 +343,7 @@ impl Writer for UmpWriter {
             ],
         })
     }
+    /// Rechecks approved bytes and all managed records, then replaces one incrementally updated array.
     fn write(
         &self,
         batch: &[Planned],
@@ -238,9 +363,11 @@ impl Writer for UmpWriter {
         let created = timestamp()?;
         let mut written = Vec::new();
         for planned in batch {
-            let position = records
-                .iter()
-                .position(|record| record["id"] == planned.target_id);
+            ensure!(
+                planned.target_id == format!("urn:ump:{}", planned.record.canonical_id),
+                "UMP planned identity mismatch"
+            );
+            let position = records.by_id.get(&planned.target_id).copied();
             let old_created = if let Some(prior) = &planned.previous_write {
                 ensure!(
                     prior.target_id == planned.target_id,
@@ -248,18 +375,22 @@ impl Writer for UmpWriter {
                 );
                 let position = position.context("UMP target was deleted after approval")?;
                 ensure!(
-                    content_hash(&mem_adaptor_core::jcs::to_vec(&records[position])?)
-                        == prior.target_hash,
+                    records.records[position].target_hash()? == prior.target_hash,
                     "UMP target payload changed after approval"
                 );
                 ensure!(
-                    record_hash(&decode(&records[position])?)? == prior.record_hash,
+                    record_hash(
+                        records.records[position]
+                            .record
+                            .as_ref()
+                            .context("UMP update target lacks migration metadata")?
+                    )? == prior.record_hash,
                     "UMP target metadata changed after approval"
                 );
                 Some(
-                    records[position]["time"]["created"]
+                    records.records[position].value["time"]["created"]
                         .as_str()
-                        .unwrap()
+                        .context("Invalid UMP target creation time")?
                         .to_owned(),
                 )
             } else {
@@ -272,7 +403,8 @@ impl Writer for UmpWriter {
                 .unwrap_or(&created);
             let origin = position
                 .and_then(|position| {
-                    records[position]
+                    records.records[position]
+                        .value
                         .pointer("/body/structured/created_origin")
                         .and_then(Value::as_str)
                 })
@@ -283,10 +415,17 @@ impl Writer for UmpWriter {
                 });
             let native = encode(&planned.record, time, origin)?;
             let target_hash = content_hash(&mem_adaptor_core::jcs::to_vec(&native)?);
+            let item = NativeRecord {
+                value: native,
+                record: Some(planned.record.clone()),
+            };
             if let Some(position) = position {
-                records[position] = native;
+                records.records[position] = item;
             } else {
-                records.push(native);
+                records
+                    .by_id
+                    .insert(planned.target_id.clone(), records.records.len());
+                records.records.push(item);
             }
             written.push(Written {
                 canonical_id: planned.record.canonical_id.clone(),
@@ -294,45 +433,148 @@ impl Writer for UmpWriter {
                 target_hash,
             });
         }
-        records.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        let bytes = serde_json::to_vec_pretty(&records)?;
+        let mut native: Vec<_> = records.records.into_iter().map(|item| item.value).collect();
+        native.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        let bytes = serde_json::to_vec_pretty(&native)?;
         target::atomic_file(&self.location, FILE, &bytes, previous_bytes.as_deref())?;
         Ok(WriteResult {
             written,
             artifacts: vec![target::output_artifact(FILE, &bytes)],
         })
     }
+    /// Revalidates the whole target once and resolves the written batch from one phase-local ID index.
     fn read_back(&self, written: &[Written]) -> Result<Vec<ReadBack>> {
+        let records = self.native_records()?;
         written
             .iter()
             .map(|written| {
                 Ok(ReadBack {
                     canonical_id: written.canonical_id.clone(),
-                    record: self
-                        .inspect(&written.target_id)?
+                    record: records
+                        .get(&written.target_id)
+                        .and_then(|item| item.record.clone())
                         .context("UMP record missing on read-back")?,
                 })
             })
             .collect()
     }
+    /// Returns only managed canonical records; a foreign record is not adopted even when its ID matches.
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>> {
-        self.native_records()?
-            .iter()
-            .find(|record| record["id"] == target_id)
-            .map(decode)
-            .transpose()
+        Ok(self
+            .native_records()?
+            .get(target_id)
+            .and_then(|item| item.record.clone()))
     }
+    /// Observes native payload identity independently of whether a record carries our bridge.
     fn target_hash(&self, target_id: &str) -> Result<Option<String>> {
         self.native_records()?
-            .iter()
-            .find(|record| record["id"] == target_id)
-            .map(|record| Ok(content_hash(&mem_adaptor_core::jcs::to_vec(record)?)))
+            .get(target_id)
+            .map(NativeRecord::target_hash)
             .transpose()
     }
-    fn artifacts(&self, _target_ids: &[String]) -> Result<Vec<TargetArtifact>> {
-        Ok(vec![target::artifact(&self.location, FILE)?])
+    /// Parses once for a planning batch, retaining foreign hashes but never promoting them to managed records.
+    fn inspect_many(&self, target_ids: &[String]) -> Result<BTreeMap<String, TargetState>> {
+        let records = self.native_records()?;
+        target_ids
+            .iter()
+            .map(|id| {
+                let item = records.get(id);
+                Ok((
+                    id.clone(),
+                    TargetState {
+                        record: item.and_then(|item| item.record.clone()),
+                        target_hash: item.map(NativeRecord::target_hash).transpose()?,
+                    },
+                ))
+            })
+            .collect()
     }
+    /// Re-reads and validates once for a native-hash batch without reusing the read-back observation.
+    fn target_hashes(&self, target_ids: &[String]) -> Result<BTreeMap<String, Option<String>>> {
+        let records = self.native_records()?;
+        target_ids
+            .iter()
+            .map(|id| {
+                Ok((
+                    id.clone(),
+                    records.get(id).map(NativeRecord::target_hash).transpose()?,
+                ))
+            })
+            .collect()
+    }
+    /// Binds raw target bytes only after all native and managed records have passed preflight validation.
+    fn artifacts(&self, _target_ids: &[String]) -> Result<Vec<TargetArtifact>> {
+        let bytes = target::read_file(&self.location, FILE)?;
+        if let Some(bytes) = &bytes {
+            parse_records(bytes)?;
+        }
+        Ok(vec![TargetArtifact {
+            path: FILE.into(),
+            content_hash: bytes.as_deref().map(content_hash),
+            bytes: bytes.as_ref().map(|bytes| bytes.len() as u64),
+        }])
+    }
+    /// Declares the one shared array artifact required by approval and output-proof verification.
     fn shared_artifact_paths(&self) -> &'static [&'static str] {
         &[FILE]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Proves each bulk observation parses once for many records and re-reads on the next phase.
+    #[test]
+    fn bulk_observations_parse_once_and_do_not_cache_across_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let writer = UmpWriter::new(directory.path().to_path_buf()).unwrap();
+        let natives: Vec<_> = (0..64)
+            .map(|i| {
+                let record = mem_adaptor_core::reader::record(
+                    "synthetic",
+                    "test",
+                    &i.to_string(),
+                    "fixture",
+                    &format!("Body {i}"),
+                    mem_adaptor_core::canonical::EvidenceLevel::Measured,
+                );
+                encode(&record, "2026-01-02T03:04:05Z", "target_migration").unwrap()
+            })
+            .collect();
+        std::fs::write(
+            writer.location().join(FILE),
+            serde_json::to_vec(&natives).unwrap(),
+        )
+        .unwrap();
+        let ids: Vec<_> = natives
+            .iter()
+            .map(|n| n["id"].as_str().unwrap().to_owned())
+            .collect();
+        PARSES.with(|count| count.set(0));
+        let observed = writer.inspect_many(&ids).unwrap();
+        assert_eq!(observed.len(), 64);
+        PARSES.with(|count| assert_eq!(count.get(), 1));
+        let written: Vec<_> = ids
+            .iter()
+            .map(|id| Written {
+                canonical_id: id.strip_prefix("urn:ump:").unwrap().into(),
+                target_id: id.clone(),
+                target_hash: "unused".into(),
+            })
+            .collect();
+        assert_eq!(writer.read_back(&written).unwrap().len(), 64);
+        PARSES.with(|count| assert_eq!(count.get(), 2));
+        assert_eq!(writer.target_hashes(&ids).unwrap().len(), 64);
+        PARSES.with(|count| assert_eq!(count.get(), 3));
+        std::fs::write(writer.location().join(FILE), b"[]").unwrap();
+        assert!(
+            writer
+                .inspect_many(&ids)
+                .unwrap()
+                .values()
+                .all(|state| state.record.is_none() && state.target_hash.is_none())
+        );
+        PARSES.with(|count| assert_eq!(count.get(), 4));
     }
 }

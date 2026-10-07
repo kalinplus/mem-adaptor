@@ -285,6 +285,10 @@ fn reports_cannot_write_into_source_or_target() {
         directory.path().join("target/plan.json").to_str().unwrap(),
     ]);
     assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Report must be outside source and target directories")
+    );
     assert!(!directory.path().join("target").exists());
 }
 
@@ -723,7 +727,7 @@ fn temporarily_missing_source_record_keeps_historical_deletion_state() {
         .iter()
         .find(|entry| entry["source_record_id"] == "a.md")
         .unwrap();
-    assert_eq!(old["disposition"]["reason"]["code"], "source_deleted");
+    assert_eq!(old["disposition"]["reason"]["code"], "source_missing");
     let target = directory.path().join("target").join(format!(
         "{}.md",
         old["prior_write"]["target_id"].as_str().unwrap()

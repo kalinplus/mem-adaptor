@@ -377,6 +377,7 @@ fn ump_source_updates_preserve_target_creation_and_deleted_records_stay_deleted(
     assert!(ump(&directory).is_empty());
 }
 
+/// Protects display-only edits through historical hashes and rejects native/bridge contradictions before planning.
 #[test]
 fn native_fields_changed_without_canonical_changes_block_history_updates() {
     for writer in ["okf", "ump"] {
@@ -410,6 +411,32 @@ fn native_fields_changed_without_canonical_changes_block_history_updates() {
                 serde_json::to_vec_pretty(&records).unwrap(),
             )
             .unwrap();
+        }
+        if writer == "ump" {
+            let previous = previous(&directory, &receipt);
+            let history_bytes = fs::read(&previous).unwrap();
+            let before = target_snapshot(&directory.path().join("target"));
+            let error = engine
+                .registry
+                .writer("home")
+                .unwrap()
+                .inspect(receipt.entries[0].target_id.as_ref().unwrap())
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("UMP native projection contradicts migration metadata")
+            );
+            let error = engine
+                .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+                .unwrap_err();
+            assert!(
+                format!("{error:#}")
+                    .contains("UMP native projection contradicts migration metadata")
+            );
+            assert_eq!(target_snapshot(&directory.path().join("target")), before);
+            assert_eq!(fs::read(previous).unwrap(), history_bytes);
+            continue;
         }
         let actual = engine
             .registry
@@ -510,6 +537,7 @@ fn unsupported_redaction_is_explicit_and_unmanaged_indices_are_never_overwritten
     );
 }
 
+/// Exercises CLI export and checks the exact link-refusal boundary without touching the external payload.
 #[test]
 fn cli_exports_ump_and_rejects_symlinked_target_artifacts() {
     let directory = fixture();
@@ -556,15 +584,25 @@ fn cli_exports_ump_and_rejects_symlinked_target_artifacts() {
         std::os::unix::fs::symlink(&outside, blocked.path().join("target/records.ump.json"))
             .unwrap();
         let engine = engine(&blocked, record(), "ump");
+        let error = engine
+            .plan(&blocked.path().join("source"), policy())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("Target artifact must not be a symlink"));
         assert!(
-            engine
-                .plan(&blocked.path().join("source"), policy())
-                .is_err()
+            fs::symlink_metadata(blocked.path().join("target/records.ump.json"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_dir(blocked.path().join("target")).unwrap().count(),
+            1
         );
         assert_eq!(fs::read_to_string(outside).unwrap(), "[]");
     }
 }
 
+/// Independently checks the native vector extension before supplementing it with a canonical round-trip.
 #[test]
 fn source_created_time_and_embedding_vectors_round_trip_through_ump() {
     let directory = fixture();
@@ -581,6 +619,10 @@ fn source_created_time_and_embedding_vectors_round_trip_through_ump() {
     let engine = engine(&directory, original.clone(), "ump");
     let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
     let native = ump(&directory);
+    assert_eq!(
+        native[0]["body"]["structured"]["mem_adaptor"]["embedding"],
+        json!({"model":"synthetic-local", "dim":2, "vector":[0.1,0.2]})
+    );
     assert_eq!(native[0]["time"]["created"], original.created_at.unwrap());
     assert_eq!(native[0]["time"]["observed"], original.observed_at.unwrap());
     assert_eq!(
@@ -625,7 +667,9 @@ fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
                 .unwrap();
         }
         let engine = Engine { registry };
+        let before = std::time::SystemTime::now();
         let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
+        let after = std::time::SystemTime::now();
         if writer == "okf" {
             for (actual, golden) in [
                 (
@@ -661,6 +705,14 @@ fn actual_native_outputs_match_reviewed_synthetic_snapshots() {
             );
         } else {
             let mut actual = ump(&directory);
+            let created = time::OffsetDateTime::parse(
+                actual[0]["time"]["created"].as_str().unwrap(),
+                &time::format_description::well_known::Rfc3339,
+            )
+            .unwrap();
+            let before = time::OffsetDateTime::from(before);
+            let after = time::OffsetDateTime::from(after);
+            assert!(before <= created && created <= after);
             actual[0]["time"]["created"] = json!("2026-01-02T03:04:05Z");
             let expected: Vec<Value> = serde_json::from_slice(
                 &fs::read(fixtures.join("snapshots/records.ump.json")).unwrap(),
@@ -798,15 +850,23 @@ fn unrelated_target_records_survive_and_unrelated_markdown_is_not_indexed() {
 }
 
 /// Injects changes around actual approved writes and verifies byte-proof refusals with the observed target state.
+/// Checks each injected byte change remains intact, all file paths/user bytes and prior evidence survive, and no receipt succeeds.
 #[test]
 fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_back() {
-    struct RacingWriter(Box<dyn Writer>, u8);
+    type Snapshot = std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>;
+    struct RacingWriter(
+        Box<dyn Writer>,
+        u8,
+        std::rc::Rc<std::cell::RefCell<Option<Snapshot>>>,
+    );
     impl RacingWriter {
+        /// Records the exact injected state so later checks cannot hide extra engine-side replacements.
         fn change_shared(&self) -> mem_adaptor_core::Result<()> {
             let path = self.location().join(self.shared_artifact_paths()[0]);
             let mut bytes = fs::read(&path)?;
             bytes.extend_from_slice(b"\n ");
             fs::write(path, bytes)?;
+            *self.2.borrow_mut() = Some(target_snapshot(self.location()));
             Ok(())
         }
     }
@@ -872,6 +932,13 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
             let initial = engine(&directory, original.clone(), writer);
             let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
             let history = previous(&directory, &receipt);
+            fs::write(
+                directory.path().join("target/user.txt"),
+                b"Protected user bytes",
+            )
+            .unwrap();
+            let before_files = target_snapshot(&directory.path().join("target"));
+            let history_bytes = fs::read(&history).unwrap();
             let mut changed = original.clone();
             changed.content.push_str("New source text.");
             changed.content_hash = content_hash(changed.content.as_bytes());
@@ -883,8 +950,9 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
             } else {
                 Box::new(UmpWriter::new(target).unwrap())
             };
+            let injected = std::rc::Rc::new(std::cell::RefCell::new(None));
             registry
-                .register_writer("home".into(), RacingWriter(inner, stage))
+                .register_writer("home".into(), RacingWriter(inner, stage, injected.clone()))
                 .unwrap();
             let engine = Engine { registry };
             let approved = plan(&engine, &directory, Some(&history));
@@ -897,6 +965,33 @@ fn writer_output_proofs_reject_changes_before_write_after_write_and_after_read_b
             } else {
                 "Writer output changed before"
             }));
+            let after_files = target_snapshot(&directory.path().join("target"));
+            assert_eq!(after_files, *injected.borrow().as_ref().unwrap());
+            assert_eq!(
+                after_files.keys().collect::<Vec<_>>(),
+                before_files.keys().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                fs::read(directory.path().join("target/user.txt")).unwrap(),
+                b"Protected user bytes"
+            );
+            assert_eq!(fs::read(&history).unwrap(), history_bytes);
+            if stage == 0 {
+                for (path, bytes) in &before_files {
+                    let expected = if path.to_str().unwrap()
+                        == initial
+                            .registry
+                            .writer("home")
+                            .unwrap()
+                            .shared_artifact_paths()[0]
+                    {
+                        [bytes.as_slice(), b"\n "].concat()
+                    } else {
+                        bytes.clone()
+                    };
+                    assert_eq!(after_files[path], expected);
+                }
+            }
             let actual = initial
                 .registry
                 .writer("home")

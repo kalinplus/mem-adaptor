@@ -450,6 +450,7 @@ fn alias_references_follow_the_final_representative_without_erasing_own_history(
     }
 }
 
+/// Refuses unsafe foreign JSON numbers with the intended JCS cause and preserves all native bytes.
 #[test]
 fn unsafe_integers_in_existing_ump_records_are_rejected_before_update() {
     let directory = fixture();
@@ -468,10 +469,15 @@ fn unsafe_integers_in_existing_ump_records_are_rejected_before_update() {
     let path = directory.path().join("target/records.ump.json");
     let bytes = serde_json::to_vec(&native).unwrap();
     fs::write(&path, &bytes).unwrap();
-    assert!(
-        engine(&directory, "ump")
-            .plan(&directory.path().join("source"), policy(GateAction::Pass))
-            .is_err()
-    );
+    let error = engine(&directory, "ump")
+        .plan(&directory.path().join("source"), policy(GateAction::Pass))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("JCS safe range"));
     assert_eq!(fs::read(path).unwrap(), bytes);
+    assert_eq!(
+        fs::read_dir(directory.path().join("target"))
+            .unwrap()
+            .count(),
+        1
+    );
 }
