@@ -231,9 +231,10 @@ impl Engine {
     }
 
     /// Plans a home-mode run under an explicitly supplied satellite identity (DEC-20).
-    /// Satellite IDs are caller-supplied in this milestone; registry lookup, issuance, and move
-    /// re-binding belong to later home-configuration work. Receipt attribution binds to the
-    /// satellite ID rather than the source path, so moving the satellite directory keeps the chain.
+    /// The engine only consumes the identity: registry lookup, issuance, and move re-binding
+    /// live in `crate::satellite` and the CLI's home layer, which hand the resolved identity to
+    /// this method. Receipt attribution binds to the satellite ID rather than the source path,
+    /// so moving the satellite directory keeps the chain.
     pub fn plan_with_satellite(
         &self,
         source: &Path,
@@ -263,6 +264,7 @@ impl Engine {
                 schema_version: SCHEMA_VERSION.into(),
                 gate_policy: gate_policy.clone(),
                 home: None,
+                satellites: None,
             },
         )?;
         crate::gate::validate_policy(&gate_policy)?;

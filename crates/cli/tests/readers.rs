@@ -19,6 +19,8 @@ use mem_adaptor_writer_okf::OkfWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 // Test support: synthetic inventories, isolated filesystems, and explicit in-process approval.
 
 /// Converts inline synthetic text into an in-memory inventory without reading a user's files.
@@ -863,6 +865,7 @@ fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() 
                 "--report",
                 report_path.to_str().unwrap(),
             ])
+            .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
         assert!(

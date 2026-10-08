@@ -4,6 +4,10 @@
   "document": {
     "schema_version": "0.1.0",
     "gate_policy": {"secrets": "block", "high_risk_pii": "pass", "rule_allowlist": ["synthetic-rule"], "origin": "user_choice", "user_selected": true},
-    "home": {"format": "okf", "okf_version": "0.2"}
+    "home": {"format": "okf", "okf_version": "0.2"},
+    "satellites": [
+      {"id": "abcd2345", "label": "Synthetic vault", "path": "/synthetic/vault", "system": "markdown", "created_at": "2026-10-05T12:00:00Z"},
+      {"id": "aaaaaaa2", "label": "Synthetic export bundle", "system": "chatgpt", "created_at": "2026-10-05T12:00:00Z"}
+    ]
   }
 }

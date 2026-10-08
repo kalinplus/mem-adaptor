@@ -1,0 +1,8 @@
+{
+  "schema": "config",
+  "expected_valid": true,
+  "document": {
+    "schema_version": "0.1.0",
+    "gate_policy": {"secrets": "pass", "high_risk_pii": "pass", "rule_allowlist": [], "origin": "default", "user_selected": false}
+  }
+}

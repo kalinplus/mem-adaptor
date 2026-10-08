@@ -72,6 +72,14 @@
     {"base": "valid/canonical-full.json", "constraint": "satellite ID is exactly 8 characters", "patch": [{"op": "add", "path": "/source/satellite_id", "value": "abcd234"}]},
     {"base": "valid/plan.json", "constraint": "satellite identity requires its registered ID", "patch": [{"op": "remove", "path": "/source/satellite/id"}]},
     {"base": "valid/plan.json", "constraint": "satellite identity binds no source path", "patch": [{"op": "add", "path": "/source/satellite/path", "value": "/synthetic-source"}]},
-    {"base": "valid/receipt.json", "constraint": "receipt source inherits the satellite ID pattern", "patch": [{"op": "add", "path": "/source/satellite/id", "value": "abcd2341"}]}
+    {"base": "valid/receipt.json", "constraint": "receipt source inherits the satellite ID pattern", "patch": [{"op": "add", "path": "/source/satellite/id", "value": "abcd2341"}]},
+    {"base": "valid/config.json", "constraint": "registry satellite ID uses the canonical base32 alphabet", "patch": [{"op": "add", "path": "/satellites/0/id", "value": "abcd2341"}]},
+    {"base": "valid/config.json", "constraint": "registry satellite ID is exactly 8 characters", "patch": [{"op": "add", "path": "/satellites/0/id", "value": "abcd234"}]},
+    {"base": "valid/config.json", "constraint": "registry entries accept no unknown members", "patch": [{"op": "add", "path": "/satellites/0/owner_declared", "value": "untrusted-example"}]},
+    {"base": "valid/config.json", "constraint": "registry entries record the detected source system", "patch": [{"op": "remove", "path": "/satellites/0/system"}]},
+    {"base": "valid/config.json", "constraint": "registry entries record their issuance time", "patch": [{"op": "remove", "path": "/satellites/0/created_at"}]},
+    {"base": "valid/config.json", "constraint": "registry issuance time is RFC 3339, not a date alone", "patch": [{"op": "add", "path": "/satellites/0/created_at", "value": "2026-10-05"}]},
+    {"base": "valid/config.json", "constraint": "registry display labels are nonempty", "patch": [{"op": "add", "path": "/satellites/0/label", "value": ""}]},
+    {"base": "valid/config.json", "constraint": "an export bundle registers no path rather than an empty one", "patch": [{"op": "add", "path": "/satellites/1/path", "value": ""}]}
   ]
 }

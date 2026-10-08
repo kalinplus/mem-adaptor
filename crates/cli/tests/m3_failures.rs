@@ -18,6 +18,8 @@ use mem_adaptor_writer_okf::OkfWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 // Support: observe exact bytes and run the same CLI that users invoke.
 
 /// Creates a synthetic source and an existing unmanaged target sentinel to detect unintended writes.
@@ -52,6 +54,7 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 /// Plans a chosen source with captured stdout and stage logs, without any interactive input.
+/// The isolated configuration root keeps direct-mode runs away from the real user configuration.
 fn plan(directory: &TempDir, source: &Path, report: &str, options: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(["plan", source.to_str().unwrap(), "--to"])
@@ -60,6 +63,7 @@ fn plan(directory: &TempDir, source: &Path, report: &str, options: &[&str]) -> O
         .arg(directory.path().join(report))
         .args(options)
         .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap()
 }
@@ -74,7 +78,11 @@ fn apply(directory: &TempDir, report: &str, receipt: Option<&Path>) -> Output {
     if let Some(receipt) = receipt {
         command.arg("--receipt").arg(receipt);
     }
-    command.env("LOG_LEVEL", "info").output().unwrap()
+    command
+        .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
+        .output()
+        .unwrap()
 }
 
 /// Requires an ordinary CLI refusal, no panic or successful artifact announcement.
@@ -224,6 +232,10 @@ impl Reader for FaultReader {
     /// Labels this fault-injection adapter as synthetic.
     fn version(&self) -> &'static str {
         "test"
+    }
+    /// Fault fixtures are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
     }
     /// Claims one real fixture path or deliberately names a path absent from the source inventory.
     fn claim(&self, _: &FileInventory) -> Vec<Claim> {

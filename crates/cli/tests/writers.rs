@@ -19,6 +19,8 @@ use mem_adaptor_writer_ump::UmpWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 struct SyntheticReader(CanonicalRecord);
 impl Reader for SyntheticReader {
     fn id(&self) -> &'static str {
@@ -26,6 +28,10 @@ impl Reader for SyntheticReader {
     }
     fn version(&self) -> &'static str {
         "test"
+    }
+    /// Fixture sources are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
     }
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
         inventory
@@ -560,6 +566,7 @@ fn cli_exports_ump_and_rejects_symlinked_target_artifacts() {
             "--report",
             report.to_str().unwrap(),
         ])
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap();
     assert!(
@@ -569,6 +576,7 @@ fn cli_exports_ump_and_rejects_symlinked_target_artifacts() {
     );
     let result = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(["apply", report.to_str().unwrap(), "--yes"])
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap();
     assert!(

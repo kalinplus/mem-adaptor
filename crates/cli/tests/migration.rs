@@ -12,13 +12,17 @@ use jsonschema::{Draft, Registry};
 use serde_json::Value;
 use tempfile::TempDir;
 
+mod common;
+
 // Test support: synthetic CLI invocations, byte snapshots, and local schema validation.
 
 /// Runs the built CLI with captured output and stage logs, without a terminal approval prompt.
+/// The isolated configuration root keeps direct-mode runs away from the real user configuration.
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(args)
         .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap()
 }

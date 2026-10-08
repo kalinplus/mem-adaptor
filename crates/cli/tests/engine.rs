@@ -33,6 +33,10 @@ impl Reader for CrossSystemReader {
     fn version(&self) -> &'static str {
         "test"
     }
+    /// Fixture sources are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
+    }
     /// Claims each isolated fixture file so the engine receives both systems through one Reader call.
     fn claim(&self, files: &FileInventory) -> Vec<Claim> {
         files
@@ -75,6 +79,10 @@ impl Reader for SyntheticReader {
     /// Labels fixture output with a synthetic adapter version.
     fn version(&self) -> &'static str {
         "test"
+    }
+    /// Fixture sources are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
     }
     /// Claims every isolated fixture file as convertible memory without parsing its contents.
     fn claim(&self, files: &FileInventory) -> Vec<Claim> {
