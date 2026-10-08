@@ -14,6 +14,8 @@ use mem_adaptor_reader_chatgpt::ChatgptReader;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 // Independent vectors: "sha256:" + hashlib.sha256(identity).hexdigest(), then lower-case Base32 of
 // hashlib.sha256(b"chatgpt\0\0" + source_id.encode()).digest()[:20], with no padding;
 // the doubled NUL is the empty direct-migration satellite segment of the DEC-20 formula.
@@ -77,6 +79,7 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 /// Runs the actual CLI's dry-run plan against temporary input and existing target files.
+/// The isolated configuration root keeps this direct-mode run away from the real user configuration.
 fn cli_plan(directory: &TempDir) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .arg("plan")
@@ -85,6 +88,7 @@ fn cli_plan(directory: &TempDir) -> Output {
         .arg(format!("okf:{}", directory.path().join("target").display()))
         .arg("--report")
         .arg(directory.path().join("plan.json"))
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap()
 }

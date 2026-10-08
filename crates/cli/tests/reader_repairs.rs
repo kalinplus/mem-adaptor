@@ -17,6 +17,8 @@ use mem_adaptor_reader_markdown::MarkdownReader;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 /// Builds an isolated in-memory source, optionally including binary invalid UTF-8 input.
 fn source(entries: &[(&str, &[u8])]) -> SourceFs {
     SourceFs {
@@ -511,6 +513,7 @@ fn mixed_bad_inputs_fail_cli_without_partial_plan_or_target_changes() {
                 "--report",
                 root.join("plan.json").to_str().unwrap(),
             ])
+            .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -713,6 +716,7 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
                 "--report",
                 plan.to_str().unwrap(),
             ])
+            .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
         assert!(
@@ -729,6 +733,7 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
                 receipt.to_str().unwrap(),
                 "--yes",
             ])
+            .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
         assert!(
@@ -804,7 +809,7 @@ fn website_metadata_secret_policies_are_reported_privately_and_enforced_in_nativ
             };
             fs::write(source.join(file), data.to_string()).unwrap();
             let mut command = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"));
-            command.args([
+            command.env("XDG_CONFIG_HOME", common::config_home()).args([
                 "plan",
                 source.to_str().unwrap(),
                 "--to",
@@ -835,6 +840,7 @@ fn website_metadata_secret_policies_are_reported_privately_and_enforced_in_nativ
                     receipt.to_str().unwrap(),
                     "--yes",
                 ])
+                .env("XDG_CONFIG_HOME", common::config_home())
                 .output()
                 .unwrap();
             assert!(

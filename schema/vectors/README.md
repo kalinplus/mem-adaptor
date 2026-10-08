@@ -46,3 +46,10 @@ optional) shared by plan and receipt reports through one definition. Both fields
 migration; the engine, not these schemas, derives canonical IDs and binds receipts to satellite identity.
 The 72 invalid cases also reject wrong-alphabet or wrong-length satellite IDs, a satellite without its
 registered ID, and unknown satellite members such as a source path.
+
+M6 `init` adds the optional top-level config `satellites` registry: each entry carries the issued `id`,
+a display-only `label`, the detected `system`, an RFC 3339 `created_at`, and an optional `path` that
+export-bundle satellites omit. The registry is append-only after an approved apply; direct-mode user
+configuration stays valid without it (`valid/config-direct.json`).
+The 80 invalid cases also reject wrong-alphabet or wrong-length registry IDs, unknown registry members,
+missing system/issuance fields, non-RFC 3339 issuance times, empty labels, and empty registered paths.

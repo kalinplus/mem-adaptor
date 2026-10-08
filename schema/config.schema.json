@@ -11,6 +11,24 @@
     "home": {
       "type": "object", "additionalProperties": false, "required": ["format", "okf_version"],
       "properties": {"format": {"const": "okf"}, "okf_version": {"const": "0.2"}}
+    },
+    "satellites": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/satellite_entry"}
+    }
+  },
+  "$defs": {
+    "satellite_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "system", "created_at"],
+      "properties": {
+        "id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/satellite_id"},
+        "label": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/nonempty"},
+        "path": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/nonempty"},
+        "system": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/nonempty"},
+        "created_at": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/timestamp"}
+      }
     }
   }
 }

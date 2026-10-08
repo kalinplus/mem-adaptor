@@ -23,6 +23,10 @@ impl Reader for MarkdownReader {
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+    /// Markdown vaults and OKF homes are directories the user keeps in place, so their path can bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
+    }
 
     /// Claims Markdown except runtime artifacts and ChatGPT Prompt files reserved for another adapter.
     /// Marks MEMORY.md and version-only native OKF root index/log files registration-only without requiring ownership.

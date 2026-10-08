@@ -1,0 +1,565 @@
+//! End-to-end home-mode coverage through the real CLI binary: `init` output and layout, the
+//! plan→apply lifecycle issuing a satellite and filing its receipt, path auto-match on the next
+//! round, the non-interactive relocation refusal, and direct-mode policy persistence.
+//! Interactive prompts cannot run under a spawned process, so the choice paths are covered by the
+//! unit tests in `crates/cli/src/home.rs` with injected answers instead of here.
+
+mod common;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use serde_json::Value;
+use tempfile::TempDir;
+
+/// Runs the built CLI with captured output, an isolated user configuration, and no terminal input.
+fn cli(args: &[&str]) -> Output {
+    use std::process::Command;
+    Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
+        .args(args)
+        .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
+        .output()
+        .unwrap()
+}
+
+/// Creates a source directory of `count` Markdown notes, the shape the Markdown reader claims.
+fn source(root: &Path, count: usize) -> PathBuf {
+    let directory = root.join("source");
+    fs::create_dir_all(&directory).unwrap();
+    for index in 0..count {
+        fs::write(
+            directory.join(format!("note-{index}.md")),
+            format!("# Note {index}\n\nbody {index}"),
+        )
+        .unwrap();
+    }
+    directory
+}
+
+/// Reads the home's satellite registry from its configuration file.
+fn registry(home: &Path) -> Vec<Value> {
+    let text = fs::read_to_string(home.join(".mem-adaptor/config.toml")).unwrap();
+    let parsed = toml::from_str::<toml::Value>(&text).unwrap();
+    let entries = parsed
+        .get("satellites")
+        .and_then(|satellites| satellites.as_array())
+        .map(|entries| serde_json::to_value(entries).unwrap())
+        .unwrap_or(serde_json::Value::Null);
+    entries.as_array().cloned().unwrap_or_default()
+}
+
+/// Extracts the single satellite printed by a plan run from its captured stdout.
+fn satellite_from(output: &Output) -> String {
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("Satellite: "))
+        .expect("plan prints its satellite");
+    line.trim_end_matches('.')
+        .trim_start_matches("Satellite: ")
+        .split(" (")
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+/// Runs the full init → plan → apply cycle once and returns the home, source, and issued satellite ID.
+fn lifecycle(root: &Path, label: &str) -> (PathBuf, PathBuf, String) {
+    let home = root.join("home");
+    let source = source(root, 6);
+    let report = root.join("plan.json");
+    let init = cli(&["init", home.to_str().unwrap()]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&init.stdout);
+    assert!(stdout.contains("WARNING: pushing this home to a public remote"));
+    assert!(stdout.contains("Secret policy: pass (shipped default"));
+    let config = home.join(".mem-adaptor/config.toml");
+    let registry_before = fs::read(&config).unwrap();
+    let target = format!("okf:{}", home.display());
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--satellite",
+        "new",
+        "--label",
+        label,
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let satellite = satellite_from(&plan);
+    assert!(
+        String::from_utf8_lossy(&plan.stdout)
+            .contains("issued here and registered after an approved apply")
+    );
+    // Planning is read-only (DEC-11): the registry bytes are unchanged and no receipt exists yet.
+    assert_eq!(fs::read(&config).unwrap(), registry_before);
+    assert!(
+        !home
+            .join(format!(".mem-adaptor/receipts/{satellite}"))
+            .exists()
+    );
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let apply_stdout = String::from_utf8_lossy(&apply.stdout);
+    assert!(apply_stdout.contains("Receipt filed: "), "{apply_stdout}");
+    (home.to_path_buf(), source, satellite)
+}
+
+#[test]
+fn init_plan_apply_lifecycle_registers_satellite_and_files_receipts() {
+    let root = TempDir::new().unwrap();
+    let (home, source, satellite) = lifecycle(root.path(), "Vault");
+    let registry = registry(&home);
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry[0]["id"].as_str().unwrap(), satellite);
+    assert_eq!(registry[0]["label"].as_str().unwrap(), "Vault");
+    assert_eq!(registry[0]["system"].as_str().unwrap(), "markdown");
+    let registered = registry[0]["path"].as_str().unwrap();
+    assert!(
+        registered.ends_with("source"),
+        "registry binds the source directory: {registered}"
+    );
+    assert!(fs::canonicalize(&source).unwrap().starts_with(registered));
+    let chain = home.join(format!(".mem-adaptor/receipts/{satellite}"));
+    let receipts: Vec<_> = fs::read_dir(&chain).unwrap().collect();
+    assert_eq!(receipts.len(), 1);
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(receipts[0].as_ref().unwrap().path()).unwrap()).unwrap();
+    assert_eq!(
+        receipt["source"]["satellite"]["id"].as_str().unwrap(),
+        satellite
+    );
+    assert_eq!(receipt["entries"].as_array().unwrap().len(), 6);
+}
+
+#[test]
+fn a_second_plan_matches_the_registered_path_without_satellite_flags() {
+    let root = TempDir::new().unwrap();
+    let (home, source, satellite) = lifecycle(root.path(), "Vault");
+    let config = home.join(".mem-adaptor/config.toml");
+    let registry_before = fs::read(&config).unwrap();
+    let report = root.path().join("plan2.json");
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&plan.stdout);
+    assert!(
+        stdout.contains(&format!("Satellite: {satellite} (Vault).")),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("issued here"));
+    // Resolution read the registry without changing it.
+    assert_eq!(fs::read(&config).unwrap(), registry_before);
+}
+
+#[test]
+fn a_moved_source_is_refused_until_the_choice_is_stated_then_rebinds() {
+    let root = TempDir::new().unwrap();
+    let (home, source, satellite) = lifecycle(root.path(), "Vault");
+    let moved = root.path().join("moved");
+    fs::rename(&source, &moved).unwrap();
+    let config = home.join(".mem-adaptor/config.toml");
+    let registry_before = fs::read(&config).unwrap();
+    let report = root.path().join("plan-moved.json");
+    let refused = cli(&[
+        "plan",
+        moved.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("already-registered sources"), "{stderr}");
+    assert!(stderr.contains("--satellite"), "{stderr}");
+    // The refusal changed nothing.
+    assert_eq!(fs::read(&config).unwrap(), registry_before);
+    assert!(!report.exists());
+    // Stating the choice rebinds the satellite to the new path after an approved apply; the display
+    // label travels with the run (mutable, never hashed), so the same satellite can be renamed in passing.
+    let chosen = cli(&[
+        "plan",
+        moved.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--satellite",
+        &satellite,
+        "--label",
+        "Renamed vault",
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        chosen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&chosen.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&chosen.stdout);
+    assert!(stdout.contains("(Renamed vault)"), "{stdout}");
+    assert!(stdout.contains("replaces that binding"), "{stdout}");
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let registry = registry(&home);
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry[0]["label"].as_str().unwrap(), "Renamed vault");
+    let registered = registry[0]["path"].as_str().unwrap();
+    assert!(
+        registered.ends_with("moved"),
+        "rebound to the new path: {registered}"
+    );
+}
+
+#[test]
+fn a_direct_first_explicit_choice_is_persisted_and_later_overrides_stay_run_local() {
+    let root = TempDir::new().unwrap();
+    let config_root = root.path().join("user-config");
+    fs::create_dir_all(&config_root).unwrap();
+    let user_config = config_root.join("mem-adaptor/config.toml");
+    let source = source(root.path(), 2);
+    let target = format!("okf:{}", root.path().join("target").display());
+    let first = root.path().join("first.json");
+    let run = |report: &Path, policy: Option<&str>| {
+        let mut args = vec![
+            "plan",
+            source.to_str().unwrap(),
+            "--to",
+            &target,
+            "--report",
+            report.to_str().unwrap(),
+        ];
+        if let Some(policy) = policy {
+            args.extend(["--secret-policy", policy]);
+        }
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_mem-adaptor"));
+        command
+            .args(&args)
+            .env("LOG_LEVEL", "info")
+            .env("XDG_CONFIG_HOME", config_root.to_str().unwrap());
+        command.output().unwrap()
+    };
+    let output = run(&first, Some("block"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Saved the gate policy"));
+    assert!(user_config.exists(), "first explicit choice persists");
+    let stored = fs::read_to_string(&user_config).unwrap();
+    assert!(stored.contains("block"));
+    // A later run-level override does not rewrite the stored policy.
+    let second = root.path().join("second.json");
+    let output = run(&second, Some("pass"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: Value = serde_json::from_slice(&fs::read(second).unwrap()).unwrap();
+    assert_eq!(document["gate_policy"]["secrets"].as_str().unwrap(), "pass");
+    assert_eq!(
+        document["gate_policy"]["origin"].as_str().unwrap(),
+        "user_choice"
+    );
+    assert_eq!(fs::read_to_string(&user_config).unwrap(), stored);
+}
+
+#[test]
+fn satellite_flags_are_validated_before_any_work() {
+    let root = TempDir::new().unwrap();
+    let source = source(root.path(), 1);
+    let target = format!("okf:{}", root.path().join("target").display());
+    let report = root.path().join("plan.json");
+    let label_only = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--label",
+        "x",
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(!label_only.status.success());
+    assert!(String::from_utf8_lossy(&label_only.stderr).contains("--label requires --satellite"));
+    let new_without_home = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--satellite",
+        "new",
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(!new_without_home.status.success());
+    assert!(String::from_utf8_lossy(&new_without_home.stderr).contains("needs a home registry"));
+    assert!(!report.exists());
+}
+
+#[test]
+fn a_source_moved_between_plan_and_apply_is_refused_and_never_touches_the_registry() {
+    let root = TempDir::new().unwrap();
+    let home = root.path().join("home");
+    let source = source(root.path(), 3);
+    let report = root.path().join("plan.json");
+    let init = cli(&["init", home.to_str().unwrap()]);
+    assert!(init.status.success());
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--satellite",
+        "new",
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let config = home.join(".mem-adaptor/config.toml");
+    let registry_before = fs::read(&config).unwrap();
+    // Apply re-opens the plan's own source location, so a moved directory fails the engine's execution-basis
+    // check before any write; the registry's own stale-plan guard sits behind that refusal as defense in
+    // depth for the identity check itself.
+    fs::rename(&source, root.path().join("moved")).unwrap();
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("[S7]"), "{stderr}");
+    assert!(stderr.contains("Cannot open source"), "{stderr}");
+    // The refused run leaves the registry exactly as it was: no satellite issued, no receipt filed.
+    assert_eq!(fs::read(&config).unwrap(), registry_before);
+    assert!(
+        !home
+            .join(".mem-adaptor/receipts")
+            .join(satellite_from(&plan))
+            .exists()
+    );
+}
+
+/// Snapshots a directory tree (relative path → bytes) so refusals can prove nothing was written.
+fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn visit(root: &Path, path: &Path, output: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        if path.is_dir() {
+            for entry in fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), output);
+            }
+        } else {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            output.insert(relative, fs::read(path).unwrap());
+        }
+    }
+    let mut output = std::collections::BTreeMap::new();
+    visit(root, root, &mut output);
+    output
+}
+
+#[test]
+fn a_home_plan_refuses_when_the_home_configuration_disappeared() {
+    let root = TempDir::new().unwrap();
+    let (home, source, _satellite) = lifecycle(root.path(), "Vault");
+    let report = root.path().join("plan2.json");
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    // Removing the registry removes the execution basis: applying as a direct migration would
+    // strand this round's receipt outside the satellite's chain, so the run must refuse.
+    fs::remove_file(home.join(".mem-adaptor/config.toml")).unwrap();
+    let target_before = tree(&home);
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("[S7]"), "{stderr}");
+    assert!(stderr.contains("no .mem-adaptor/config.toml"), "{stderr}");
+    // Refused before approval and writes: no target byte changed, no approval, no receipt.
+    assert_eq!(tree(&home), target_before);
+    assert!(!report.with_extension("approval.json").exists());
+    assert!(!report.with_extension("receipt.json").exists());
+}
+
+#[test]
+fn a_direct_plan_refuses_when_its_target_became_a_home() {
+    let root = TempDir::new().unwrap();
+    let source = source(root.path(), 2);
+    let target = root.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    let report = root.path().join("plan.json");
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", target.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let init = cli(&["init", target.to_str().unwrap()]);
+    assert!(init.status.success());
+    let target_before = tree(&target);
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("target is now a home"), "{stderr}");
+    assert_eq!(tree(&target), target_before);
+}
+
+#[test]
+fn a_direct_plan_with_an_explicit_satellite_refuses_after_the_target_became_a_home() {
+    let root = TempDir::new().unwrap();
+    let source = source(root.path(), 2);
+    let target = root.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    let report = root.path().join("plan.json");
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", target.display()),
+        "--satellite",
+        "aaaaaaa2",
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let init = cli(&["init", target.to_str().unwrap()]);
+    assert!(init.status.success());
+    let target_before = tree(&target);
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    // The identity is neither registered in the new home nor derivable from the source, so the
+    // refusal happens before writes instead of failing registry convergence afterwards.
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("neither registered"), "{stderr}");
+    assert_eq!(tree(&target), target_before);
+    assert!(!report.with_extension("approval.json").exists());
+}
+
+#[test]
+fn a_failed_home_receipt_save_reports_partial_completion() {
+    let root = TempDir::new().unwrap();
+    let (home, _source, satellite) = lifecycle(root.path(), "Vault");
+    let report = root.path().join("plan2.json");
+    let plan = cli(&[
+        "plan",
+        root.path().join("source").to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(plan.status.success());
+    // Breaking the receipts root after planning makes the final receipt save fail after the
+    // engine already wrote targets and the registry already converged.
+    fs::remove_dir_all(home.join(".mem-adaptor/receipts")).unwrap();
+    fs::write(home.join(".mem-adaptor/receipts"), b"not a directory").unwrap();
+    let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("[S9]"), "{stderr}");
+    assert!(stderr.contains("Home receipt save failed"), "{stderr}");
+    // Partial completion is observable: the satellite is registered and targets were written.
+    assert_eq!(registry(&home)[0]["id"].as_str().unwrap(), satellite);
+    assert!(home.join("memories").is_dir());
+}
+
+#[test]
+fn an_explicit_receipt_override_in_home_mode_warns_and_leaves_the_chain_alone() {
+    let root = TempDir::new().unwrap();
+    let (home, _source, satellite) = lifecycle(root.path(), "Vault");
+    let report = root.path().join("plan2.json");
+    let plan = cli(&[
+        "plan",
+        root.path().join("source").to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(plan.status.success());
+    let chain = home.join(format!(".mem-adaptor/receipts/{satellite}"));
+    let chain_before = tree(&chain);
+    assert_eq!(
+        chain_before.len(),
+        1,
+        "the first apply filed exactly one receipt"
+    );
+    let receipt = root.path().join("override.json");
+    let apply = cli(&[
+        "apply",
+        report.to_str().unwrap(),
+        "--yes",
+        "--receipt",
+        receipt.to_str().unwrap(),
+    ]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&apply.stdout);
+    assert!(
+        stdout.contains("overrides the home receipt chain"),
+        "{stdout}"
+    );
+    assert!(receipt.is_file());
+    // The chain is untouched by the overridden run.
+    assert_eq!(tree(&chain), chain_before);
+}

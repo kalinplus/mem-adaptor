@@ -21,6 +21,10 @@ impl Reader for ClaudeReader {
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+    /// Claude exports are downloaded bundles; their path changes per download and never binds a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::ExportBundle
+    }
     /// Recognizes shared names by shape or same-directory evidence without treating parse failure as absence.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
         inventory

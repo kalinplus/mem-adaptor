@@ -24,6 +24,10 @@ impl Reader for ChatgptReader {
     fn version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+    /// ChatGPT exports are downloaded bundles; their path changes per download and never binds a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::ExportBundle
+    }
     /// Claims explicit source names even when corrupt so read can return a parse failure.
     /// Ambiguous JSON names need their own shape or same-parent evidence; descendant files are not evidence.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {

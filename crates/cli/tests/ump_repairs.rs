@@ -21,6 +21,8 @@ use mem_adaptor_writer_ump::UmpWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 const FILE: &str = "records.ump.json";
 
 struct SyntheticReader(Vec<CanonicalRecord>);
@@ -33,6 +35,10 @@ impl Reader for SyntheticReader {
     /// Supplies a deterministic adapter version to approval recomputation.
     fn version(&self) -> &'static str {
         "test"
+    }
+    /// Fixture sources are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
     }
     /// Claims only the fixture inventory; an actually empty directory yields no records.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
@@ -1650,10 +1656,12 @@ fn cli_fixture(body: &str) -> TempDir {
 }
 
 /// Captures both real CLI output streams without remote services or an interactive terminal.
+/// The isolated configuration root keeps direct-mode runs away from the real user configuration.
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(args)
         .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap()
 }
@@ -1971,6 +1979,7 @@ fn cli_fifo_native_target_is_refused_without_opening_or_hanging() {
             "--report",
             root.join("plan.json").to_str().unwrap(),
         ])
+        .env("XDG_CONFIG_HOME", common::config_home())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

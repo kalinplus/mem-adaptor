@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use jsonschema::{Draft, Registry, Validator};
 use mem_adaptor_core::canonical::{CanonicalRecord, Verdict};
-use mem_adaptor_core::governance::{ApprovalReceipt, Config, HomeConfig, HomeFormat};
+use mem_adaptor_core::governance::{
+    ApprovalReceipt, Config, HomeConfig, HomeFormat, SatelliteEntry,
+};
 use mem_adaptor_core::reports::*;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -268,6 +270,7 @@ fn rust_constructed_minimal_and_full_examples_match_schemas() {
         schema_version: "0.1.0".into(),
         gate_policy: support::policy(),
         home: None,
+        satellites: None,
     };
     let examples = [
         ("canonical-record", json!(support::canonical())),
@@ -285,7 +288,30 @@ fn rust_constructed_minimal_and_full_examples_match_schemas() {
                     format: HomeFormat::Okf,
                     okf_version: "0.2".into(),
                 }),
-                ..config
+                ..config.clone()
+            }),
+        ),
+        // A populated home registry: one path-bound directory satellite and one export bundle without a path.
+        (
+            "config",
+            json!(Config {
+                satellites: Some(vec![
+                    SatelliteEntry {
+                        id: "rlaqxsde".into(),
+                        label: "vault".into(),
+                        path: Some("/synthetic/vault".into()),
+                        system: "markdown".into(),
+                        created_at: support::TIME.into(),
+                    },
+                    SatelliteEntry {
+                        id: "jongrphl".into(),
+                        label: "chatgpt-export".into(),
+                        path: None,
+                        system: "chatgpt".into(),
+                        created_at: support::TIME.into(),
+                    },
+                ]),
+                ..config.clone()
             }),
         ),
     ];

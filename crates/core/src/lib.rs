@@ -9,6 +9,7 @@ pub mod okf;
 pub mod plugins;
 pub mod reader;
 pub mod reports;
+pub mod satellite;
 pub mod schema;
 pub mod source;
 pub mod writer;

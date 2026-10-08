@@ -22,6 +22,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+toml.workspace = true
 jsonschema.workspace = true
 zip.workspace = true
 serde-saphyr.workspace = true

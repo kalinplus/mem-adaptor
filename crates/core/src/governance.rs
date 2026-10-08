@@ -1,6 +1,7 @@
 //! Defines policy, finding, approval, and configuration shapes shared by planning, execution, and reports.
 //! The CLI currently records local approval; these types do not provide authentication, signatures, or a ledger.
-//! Configuration types describe a contract, not implemented config-file persistence or an init command.
+//! Configuration types are the shape contract; TOML persistence and the satellite registry lifecycle live in
+//! `crate::satellite`, and the `init` command belongs to the CLI.
 
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +87,7 @@ pub struct ApprovalReceipt {
 }
 
 /// Describes validated policy/home settings without implementing loading or saving a user's config file.
+/// Loading, saving, and the satellite registry lifecycle live in `crate::satellite`; this type is the shape contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -93,6 +95,24 @@ pub struct Config {
     pub gate_policy: GatePolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home: Option<HomeConfig>,
+    /// Home-mode satellite registry (DEC-20 item 4); absent in direct-mode user configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub satellites: Option<Vec<SatelliteEntry>>,
+}
+
+/// Binds one issued satellite ID to its display label, detected source system, and current path binding.
+/// The ID is issued once and never changes; `path` is a rebindable resolution hint and is absent for
+/// export-bundle satellites whose download location is not stable. The label is display-only and mutable:
+/// it never participates in any hash and is not required to be unique.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SatelliteEntry {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub system: String,
+    pub created_at: String,
 }
 
 /// Describes the chosen home format/version without establishing synchronization or history storage.

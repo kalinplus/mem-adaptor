@@ -58,8 +58,19 @@ pub struct ReaderOutput {
 pub trait Reader {
     fn id(&self) -> &'static str;
     fn version(&self) -> &'static str;
+    /// Declares whether this Reader interprets a downloaded export bundle or a live directory (DEC-20 item 5).
+    /// The declaration, not the on-disk shape, decides: a Gemini Takeout is a directory-shaped export bundle.
+    /// Satellite resolution uses it to require an explicit satellite for bundles and to skip path registration.
+    fn source_kind(&self) -> SourceKind;
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim>;
     fn read(&self, claim: &Claim, source: &SourceFs) -> Result<ReaderOutput>;
+}
+
+/// Classifies a source as a one-shot downloaded export bundle or a directory the user keeps in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    ExportBundle,
+    Directory,
 }
 
 pub struct Planned {

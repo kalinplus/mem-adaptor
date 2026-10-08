@@ -21,6 +21,8 @@ use mem_adaptor_writer_okf::OkfWriter;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod common;
+
 struct SyntheticReader(Vec<CanonicalRecord>);
 
 impl Reader for SyntheticReader {
@@ -31,6 +33,10 @@ impl Reader for SyntheticReader {
     /// Keeps the source adapter identity deterministic.
     fn version(&self) -> &'static str {
         "test"
+    }
+    /// Fixture sources are directories held in place for the run, so their path may bind a satellite.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Directory
     }
     /// Claims the single fixture file without involving source-format heuristics.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
@@ -1197,10 +1203,12 @@ fn changed_target_parent_is_refused_without_outside_write_or_success_receipt() {
 }
 
 /// Runs actual CLI commands with captured logs, preserving noninteractive approval semantics.
+/// The isolated configuration root keeps direct-mode runs away from the real user configuration.
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
         .args(args)
         .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
         .output()
         .unwrap()
 }
