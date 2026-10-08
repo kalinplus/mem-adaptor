@@ -198,7 +198,7 @@ fn a_moved_source_is_refused_until_the_choice_is_stated_then_rebinds() {
     ]);
     assert!(!refused.status.success());
     let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(stderr.contains("matches registered satellites"), "{stderr}");
+    assert!(stderr.contains("already-registered sources"), "{stderr}");
     assert!(stderr.contains("--satellite"), "{stderr}");
     // The refusal changed nothing.
     assert_eq!(fs::read(&config).unwrap(), registry_before);

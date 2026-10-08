@@ -190,16 +190,8 @@ fn run() -> Result<()> {
                 .map(normalize_path)
                 .transpose()?;
             let mut ask = read_line as fn(&str) -> Result<String>;
-            let mut choose =
-                prompt_relocation as fn(&[RelocationCandidate]) -> Result<Option<String>>;
             let mut refuse = crate::home::refuse_relocation
                 as fn(&[RelocationCandidate]) -> Result<Option<String>>;
-            let prompt: &mut dyn FnMut(&[RelocationCandidate]) -> Result<Option<String>> =
-                if interactive {
-                    &mut choose
-                } else {
-                    &mut refuse
-                };
             let (policy, spec) = match &home {
                 Some(home) => {
                     // The home's own configuration is the policy of record; explicit flags override this run
@@ -209,6 +201,15 @@ fn run() -> Result<()> {
                         secret_action,
                         allow_rule,
                     );
+                    let mut choose = |suspects: &[RelocationCandidate]| {
+                        crate::home::prompt_relocation(suspects, &mut read_answer)
+                    };
+                    let prompt: &mut dyn FnMut(&[RelocationCandidate]) -> Result<Option<String>> =
+                        if interactive {
+                            &mut choose
+                        } else {
+                            &mut refuse
+                        };
                     let resolved = crate::home::resolve_satellite(
                         home,
                         &engine.registry,
@@ -461,50 +462,18 @@ fn direct_satellite(satellite: Option<&str>, label: Option<&str>) -> Result<Opti
     }
 }
 
-/// Presents suspected relocation or path reuse and reads one decision (DEC-20 item 6): the number of a
-/// satellite to rebind to this path, or 0 to continue as a new satellite. Returns `None` for a new satellite.
-/// It only proposes a choice; nothing is merged or rebound here.
-fn prompt_relocation(suspects: &[RelocationCandidate]) -> Result<Option<String>> {
-    eprintln!(
-        "WARNING: this source path is not registered, but its records mostly match registered satellites."
-    );
-    eprintln!(
-        "This may be a moved satellite or a reused path; continuing silently could split one memory chain or mix two."
-    );
-    for (index, suspect) in suspects.iter().enumerate() {
-        eprintln!(
-            "  {}. satellite {} ({}) matches {}/{} records ({:.0}%)",
-            index + 1,
-            suspect.satellite_id,
-            suspect.label,
-            suspect.matched,
-            suspect.total,
-            suspect.ratio * 100.0
-        );
-    }
-    let answer = read_line(&format!(
-        "Enter a number to rebind that satellite to this path, or 0 to continue as a new satellite [0-{}]: ",
-        suspects.len()
-    ))?;
-    let choice: usize = answer
-        .trim()
-        .parse()
-        .context("Relocation choice must be a number")?;
-    ensure!(
-        choice <= suspects.len(),
-        "Relocation choice must be between 0 and {}",
-        suspects.len()
-    );
-    Ok((choice > 0).then(|| suspects[choice - 1].satellite_id.clone()))
+/// Prints a prompt and reads one answer line; end of input yields no answer at all, which callers must treat
+/// as a missing choice instead of an empty one.
+fn read_answer(prompt: &str) -> Result<Option<String>> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    Ok((io::stdin().read_line(&mut answer)? > 0).then_some(answer))
 }
 
 /// Prints a prompt and reads one answer line; end of input yields an empty answer.
 fn read_line(prompt: &str) -> Result<String> {
-    print!("{prompt}");
-    io::stdout().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(answer)
+    Ok(read_answer(prompt)?.unwrap_or_default())
 }
 
 /// Names a gate action for user-facing output.

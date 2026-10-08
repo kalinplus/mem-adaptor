@@ -150,21 +150,68 @@ pub fn resolve_satellite(
     }
 }
 
-/// Non-interactive relocation policy (DEC-20 item 6): refuse rather than guess a chain or split one satellite's
-/// memories across two IDs. Names the suspects and the explicit escape hatch so a script can state the choice.
+/// Interactive relocation choice (DEC-20 item 6): asks, one suspect at a time and best match first,
+/// whether this directory is the same source as a registered one. `y` or a plain Enter continues that source
+/// here; declining every suspect continues as a new source. A closed input is a missing choice and is
+/// refused rather than defaulted, so an unanswered identity never proceeds by guess. It only proposes a
+/// choice: nothing is merged or rebound here.
+pub(crate) fn prompt_relocation(
+    suspects: &[RelocationCandidate],
+    read_line: &mut dyn FnMut(&str) -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    eprintln!(
+        "WARNING: this source directory is not registered, but its records mostly match an already-registered source."
+    );
+    eprintln!(
+        "If it is the same source after a move, continuing that source keeps one history; registering it as a new source would split that history in two."
+    );
+    eprintln!(
+        "If it is actually a different source, continuing the match would mix the two sources together."
+    );
+    let mut ordered: Vec<&RelocationCandidate> = suspects.iter().collect();
+    ordered.sort_by(|a, b| b.matched.cmp(&a.matched).then(b.ratio.total_cmp(&a.ratio)));
+    for suspect in ordered {
+        let Some(answer) = read_line(&format!(
+            "Is this the same source as {} ({}), matching {} of {} records ({:.0}%)? [Y/n]: ",
+            suspect.satellite_id,
+            suspect.label,
+            suspect.matched,
+            suspect.total,
+            suspect.ratio * 100.0
+        ))?
+        else {
+            bail!(
+                "Input closed before the relocation choice was answered; answer the question on a rerun, or state the choice with --satellite <ID> or --satellite new"
+            );
+        };
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(Some(suspect.satellite_id.clone())),
+            "n" | "no" => {}
+            other => bail!(
+                "Answer {other} is neither y nor n; choose y to continue that source or n to register this one as a new source"
+            ),
+        }
+    }
+    eprintln!("Continuing as a new source.");
+    Ok(None)
+}
+
+/// Non-interactive relocation policy (DEC-20 item 6): refuse rather than guess a history or split one
+/// source's memories across two IDs. Names the suspects and the explicit escape hatch so a script can state
+/// the choice.
 pub fn refuse_relocation(suspects: &[RelocationCandidate]) -> Result<Option<String>> {
     let listed = suspects
         .iter()
         .map(|suspect| {
             format!(
-                "{} ({}) matches {}/{} records",
+                "{} ({}), {} of {} records",
                 suspect.satellite_id, suspect.label, suspect.matched, suspect.total
             )
         })
         .collect::<Vec<_>>()
         .join("; ");
     bail!(
-        "This source path is not registered but matches registered satellites: {listed}. It may be a moved satellite or a reused path, so continuing silently could split one memory chain or mix two. Re-run in a terminal to choose, or state the choice now: --satellite <ID> rebinds that satellite, --satellite new issues a new one"
+        "This source directory is not registered but mostly matches already-registered sources: {listed}. It may be the same source after a move: continuing as a new source would split its history, continuing the wrong source would mix two together. Re-run in a terminal to choose, or state the choice now: --satellite <ID> continues that source at this path, --satellite new registers this one as a new source"
     )
 }
 
@@ -995,15 +1042,83 @@ mod tests {
         )
         .unwrap_err();
         let message = format!("{error:#}");
-        assert!(
-            message.contains("matches registered satellites"),
-            "{message}"
-        );
+        assert!(message.contains("already-registered sources"), "{message}");
         assert!(message.contains("--satellite"), "{message}");
         // The refusal is read-only: the registry keeps its old binding and gains no satellite.
         let config = satellite::read_config(&satellite::home_config_path(&home.directory))
             .unwrap()
             .unwrap();
         assert_eq!(config.satellites.as_ref().map(Vec::len), Some(1));
+    }
+
+    /// Builds a suspect for the question-parsing tests; the ratio matches matched/total as in production.
+    fn suspect(id: &str, label: &str, matched: usize, total: usize) -> RelocationCandidate {
+        RelocationCandidate {
+            satellite_id: id.into(),
+            label: label.into(),
+            matched,
+            total,
+            ratio: matched as f64 / total as f64,
+        }
+    }
+
+    #[test]
+    fn the_relocation_question_accepts_y_and_a_plain_enter_as_yes() {
+        let suspects = vec![suspect("abcd2345", "My Vault", 6, 7)];
+        // Enter arrives from a terminal as a bare newline, not an empty string.
+        for answer in ["y", "Y", "yes", "\n"] {
+            let chosen = prompt_relocation(&suspects, &mut |_| Ok(Some(answer.into()))).unwrap();
+            assert_eq!(chosen.as_deref(), Some("abcd2345"), "answer {answer:?}");
+        }
+    }
+
+    #[test]
+    fn closed_input_is_a_missing_choice_and_is_refused() {
+        let suspects = vec![suspect("abcd2345", "My Vault", 6, 7)];
+        let error = prompt_relocation(&suspects, &mut |_| Ok(None)).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("Input closed"), "{message}");
+        assert!(message.contains("--satellite"), "{message}");
+    }
+
+    #[test]
+    fn the_relocation_question_asks_the_best_match_first_and_takes_a_decline_in_turn() {
+        let suspects = vec![
+            suspect("weak1234", "Weak", 5, 8),
+            suspect("best5678", "Best", 7, 8),
+        ];
+        // A plain Enter accepts the first question, which must be the stronger match.
+        let chosen = prompt_relocation(&suspects, &mut |_| Ok(Some("\n".into()))).unwrap();
+        assert_eq!(chosen.as_deref(), Some("best5678"));
+        // Declining the first question moves to the second; accepting it continues that source.
+        let answers = ["n", "y"];
+        let mut index = 0;
+        let mut asked = Vec::new();
+        let chosen = prompt_relocation(&suspects, &mut |prompt| {
+            asked.push(prompt.to_string());
+            let answer = answers[index].to_string();
+            index += 1;
+            Ok(Some(answer))
+        })
+        .unwrap();
+        assert_eq!(chosen.as_deref(), Some("weak1234"));
+        assert_eq!(asked.len(), 2);
+        assert!(asked[0].contains("best5678"), "{}", asked[0]);
+        assert!(asked[1].contains("weak1234"), "{}", asked[1]);
+    }
+
+    #[test]
+    fn declining_every_relocation_question_continues_as_a_new_source() {
+        let suspects = vec![suspect("abcd2345", "My Vault", 6, 7)];
+        let chosen = prompt_relocation(&suspects, &mut |_| Ok(Some("no".into()))).unwrap();
+        assert_eq!(chosen, None);
+    }
+
+    #[test]
+    fn an_unrecognised_relocation_answer_is_refused() {
+        let suspects = vec![suspect("abcd2345", "My Vault", 6, 7)];
+        let error = prompt_relocation(&suspects, &mut |_| Ok(Some("maybe".into()))).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("neither y nor n"), "{message}");
     }
 }
