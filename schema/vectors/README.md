@@ -39,3 +39,10 @@ Recursive `jcs_value` validation rejects all integers outside ±(2^53−1), incl
 and integral scientific notation. The 67 invalid cases include these constraints.
 Writer output proofs are checked against observed files; observing a changed file does not create
 a new successful historical overwrite baseline. Existing golden reports and native outputs remain unchanged.
+
+M6 adds optional `source.satellite_id` (8 lowercase base32 characters, `^[a-z2-7]{8}$`) to the canonical
+source identity, and the optional report `source.satellite` object (`id` required, display-only `label`
+optional) shared by plan and receipt reports through one definition. Both fields stay absent in direct
+migration; the engine, not these schemas, derives canonical IDs and binds receipts to satellite identity.
+The 72 invalid cases also reject wrong-alphabet or wrong-length satellite IDs, a satellite without its
+registered ID, and unknown satellite members such as a source path.

@@ -44,7 +44,15 @@
             "type": "object", "additionalProperties": false, "required": ["id", "version"],
             "properties": {"id": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}}
           }
-        }
+        },
+        "satellite": {"$ref": "#/$defs/satellite"}
+      }
+    },
+    "satellite": {
+      "type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/satellite_id"},
+        "label": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/nonempty"}
       }
     },
     "target": {

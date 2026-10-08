@@ -146,6 +146,7 @@ impl ChatgptReader {
                 let mut record = normalize::record(
                     self.id(),
                     self.version(),
+                    source.satellite_id.as_deref(),
                     &id,
                     &locator,
                     content,
@@ -275,6 +276,7 @@ impl ChatgptReader {
             let mut record = normalize::record(
                 self.id(),
                 self.version(),
+                source.satellite_id.as_deref(),
                 &id,
                 &locator,
                 content,

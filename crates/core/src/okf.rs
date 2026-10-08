@@ -66,7 +66,12 @@ pub fn managed_metadata(text: &str) -> crate::Result<Option<Value>> {
     Ok(Some(metadata))
 }
 
-/// Restores the canonical extension and checks source-derived identity, without silently repairing its body hash.
+/// Restores the canonical extension from a home copy without re-deriving identity from run context (DEC-20).
+/// The stored canonical_id and satellite_id are authoritative: schema validation enforces their format, and
+/// the consistency check only verifies that the stored identity agrees with the record's own stored source
+/// fields under the one unconditional formula; a never-substituted, internally inconsistent envelope is an
+/// error rather than a silent repair. Satellite-chain attribution belongs to engine receipt binding, and
+/// body-hash mismatches surface through callers rather than being repaired here.
 pub fn restore(metadata: &Value, body: &str) -> crate::Result<CanonicalRecord> {
     let mut extension = metadata["mem_adaptor"].clone();
     let object = extension
@@ -78,7 +83,11 @@ pub fn restore(metadata: &Value, body: &str) -> crate::Result<CanonicalRecord> {
     crate::schema::validate("canonical-record", &record)?;
     ensure!(
         record.canonical_id
-            == crate::engine::canonical_id(&record.source.system, &record.source_record_id),
+            == crate::engine::canonical_id(
+                &record.source.system,
+                record.source.satellite_id.as_deref().unwrap_or(""),
+                &record.source_record_id
+            ),
         "Managed OKF source identity mismatch"
     );
     Ok(record)

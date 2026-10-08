@@ -140,7 +140,12 @@ fn validate_bridge(record: &CanonicalRecord) -> Result<()> {
     mem_adaptor_core::schema::validate("canonical-record", record)
         .map_err(|_| anyhow::anyhow!("Invalid UMP migration metadata schema"))?;
     ensure!(
-        record.canonical_id == canonical_id(&record.source.system, &record.source_record_id),
+        record.canonical_id
+            == canonical_id(
+                &record.source.system,
+                record.source.satellite_id.as_deref().unwrap_or(""),
+                &record.source_record_id
+            ),
         "UMP bridge source identity mismatch"
     );
     ensure!(
@@ -534,6 +539,7 @@ mod tests {
                 let record = mem_adaptor_core::reader::record(
                     "synthetic",
                     "test",
+                    None,
                     &i.to_string(),
                     "fixture",
                     &format!("Body {i}"),

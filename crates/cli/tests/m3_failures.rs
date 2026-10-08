@@ -256,14 +256,14 @@ impl Reader for FaultReader {
         record.source.system = "synthetic".into();
         record.source_record_id = "note".into();
         record.source_locator = claim.path.clone();
-        record.canonical_id = canonical_id("synthetic", "note");
+        record.canonical_id = canonical_id("synthetic", "", "note");
         record.content_hash = content_hash(record.content.as_bytes());
         let mut source =
             mem_adaptor_core::reader::source(&record, &claim.path, json!({"body": record.content}));
         mem_adaptor_core::reader::map(&mut source, "/body", "/content");
         match self.fault {
             Fault::Schema => record.source_record_id = String::new(),
-            Fault::Identity => record.canonical_id = canonical_id("synthetic", "another"),
+            Fault::Identity => record.canonical_id = canonical_id("synthetic", "", "another"),
             Fault::Hash => record.content_hash = content_hash(b"another"),
             Fault::Dimension => {
                 record.embedding = Some(Embedding {

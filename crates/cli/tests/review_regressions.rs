@@ -224,7 +224,7 @@ fn a_new_earlier_duplicate_never_replaces_the_existing_written_identity() {
         let first = apply(&engine, &plan(&engine, &directory, None));
         let new_name = (0..100)
             .map(|n| format!("new{n}.md"))
-            .find(|name| canonical_id("markdown", name) < first.entries[0].canonical_id)
+            .find(|name| canonical_id("markdown", "", name) < first.entries[0].canonical_id)
             .unwrap();
         fs::write(
             directory.path().join("source").join(&new_name),
@@ -389,7 +389,7 @@ fn alias_references_follow_the_final_representative_without_erasing_own_history(
         }
         let previous = history(&directory, &second, "second.json");
         let third = apply(&engine, &plan(&engine, &directory, Some(&previous)));
-        let representative = canonical_id("markdown", "b.md");
+        let representative = canonical_id("markdown", "", "b.md");
         for name in ["a.md", "c.md"] {
             let entry = third
                 .entries

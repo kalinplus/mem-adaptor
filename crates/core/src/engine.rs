@@ -31,13 +31,17 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{}", HEXLOWER.encode(&Sha256::digest(bytes)))
 }
 
-/// Derives a stable, 32-character lowercase base32 ID from the source system and native record ID.
-/// A NUL separator distinguishes otherwise ambiguous concatenations; the first 20 hash bytes form the ID.
+/// Derives a stable, 32-character lowercase base32 ID from the source system, satellite ID, and native record ID.
+/// NUL separators distinguish otherwise ambiguous concatenations; the first 20 hash bytes form the ID.
+/// The satellite segment is the empty string in direct migration but still participates in the hash (DEC-20:
+/// one unconditional formula), so home-mode IDs stay anchored to the satellite registration, not the source path.
 /// Content and metadata do not affect it, so callers must supply a stable native ID within the source system.
 /// This helper neither validates the source ID nor performs content deduplication.
-pub fn canonical_id(system: &str, source_record_id: &str) -> String {
+pub fn canonical_id(system: &str, satellite_id: &str, source_record_id: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(system.as_bytes());
+    hash.update([0]);
+    hash.update(satellite_id.as_bytes());
     hash.update([0]);
     hash.update(source_record_id.as_bytes());
     BASE32_NOPAD
@@ -209,12 +213,13 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Predicts treatment using no historical receipt; planning inspects inputs but does not invoke Writer writes.
+    /// Predicts treatment for direct migration with no satellite identity and no historical receipt.
+    /// Planning inspects inputs but does not invoke Writer writes; see plan_with_satellite for home mode.
     pub fn plan(&self, source: &Path, gate_policy: GatePolicy) -> Result<PlanReport> {
         self.plan_with_previous(source, gate_policy, None)
     }
 
-    /// Returns a validated plan with optional prior evidence; explicitly supplied invalid history is an error.
+    /// Returns a validated direct-migration plan with optional prior evidence; invalid history is an error.
     /// Source/adapter/validation errors propagate before target writes; saving the report belongs to the caller.
     pub fn plan_with_previous(
         &self,
@@ -222,15 +227,33 @@ impl Engine {
         gate_policy: GatePolicy,
         previous: Option<&Path>,
     ) -> Result<PlanReport> {
-        Ok(self.prepare(source, gate_policy, previous)?.report)
+        Ok(self.prepare(source, gate_policy, None, previous)?.report)
+    }
+
+    /// Plans a home-mode run under an explicitly supplied satellite identity (DEC-20).
+    /// Satellite IDs are caller-supplied in this milestone; registry lookup, issuance, and move
+    /// re-binding belong to later home-configuration work. Receipt attribution binds to the
+    /// satellite ID rather than the source path, so moving the satellite directory keeps the chain.
+    pub fn plan_with_satellite(
+        &self,
+        source: &Path,
+        gate_policy: GatePolicy,
+        satellite: &SatelliteSpec,
+        previous: Option<&Path>,
+    ) -> Result<PlanReport> {
+        Ok(self
+            .prepare(source, gate_policy, Some(satellite), previous)?
+            .report)
     }
 
     /// Rebuilds source coverage, target projections, and approval inputs for both plan and apply.
     /// Checks policy, records, and supplied history; it may extract a ZIP to temporary storage but never writes targets.
+    /// The optional satellite anchors home-mode identity and receipt attribution; None means direct migration.
     fn prepare(
         &self,
         source: &Path,
         gate_policy: GatePolicy,
+        satellite: Option<&SatelliteSpec>,
         previous_ref: Option<&Path>,
     ) -> Result<PipelinePlan> {
         let started = Instant::now();
@@ -243,8 +266,25 @@ impl Engine {
             },
         )?;
         crate::gate::validate_policy(&gate_policy)?;
+        // Reject an unusable satellite identity before loading anything, with a clearer message than
+        // end-of-plan schema validation; the schema remains the authoritative structural contract.
+        if let Some(satellite) = satellite {
+            ensure!(
+                satellite.id.len() == 8
+                    && satellite
+                        .id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || (b'2'..=b'7').contains(&byte)),
+                "Satellite ID must be 8 lowercase base32 characters"
+            );
+            if let Some(label) = &satellite.label {
+                ensure!(!label.is_empty(), "Satellite label must not be empty");
+            }
+        }
         info!("[S1] source inventory started");
-        let source = load_source(source)?;
+        let mut source = load_source(source)?;
+        // Readers anchor record identity and scope qualifiers to the run's satellite; direct mode has none.
+        source.satellite_id = satellite.map(|satellite| satellite.id.clone());
         ensure!(
             crate::gate::mask(source.root.to_str().context("Source path is not UTF-8")?)
                 == source.root.to_string_lossy(),
@@ -263,10 +303,32 @@ impl Engine {
                 let receipt: ReceiptReport = serde_json::from_slice(&bytes)
                     .map_err(|_| anyhow::anyhow!("Invalid previous receipt JSON or fields"))?;
                 crate::schema::validate("receipt-report", &receipt)?;
-                ensure!(
-                    receipt.source.location == source.root.to_string_lossy(),
-                    "Previous receipt belongs to another source"
-                );
+                if let Some(satellite) = satellite {
+                    // Home-mode receipt attribution binds to the satellite identity, not the source
+                    // path (DEC-20); a direct-mode receipt never satisfies a satellite run.
+                    ensure!(
+                        receipt
+                            .source
+                            .satellite
+                            .as_ref()
+                            .map(|item| item.id.as_str())
+                            == Some(satellite.id.as_str()),
+                        "Previous receipt belongs to another satellite"
+                    );
+                } else {
+                    // Symmetric contract: a receipt must share the run's identity regime. A satellite
+                    // receipt's entries carry satellite-derived canonical IDs that can never match
+                    // direct-mode records, so accepting one at the same location would silently
+                    // disable resurrection guards and prior-write protection; reject it explicitly.
+                    ensure!(
+                        receipt.source.satellite.is_none(),
+                        "Previous receipt belongs to a satellite run; direct migration cannot use satellite history"
+                    );
+                    ensure!(
+                        receipt.source.location == source.root.to_string_lossy(),
+                        "Previous receipt belongs to another source"
+                    );
+                }
                 ensure!(
                     receipt
                         .entries
@@ -419,11 +481,17 @@ impl Engine {
                 }
             }
             for record in output.records {
-                // Schema validation checks structure; re-derive identity and body hashes rather than trusting Reader claims.
+                // Schema validation checks structure; identity and body hashes are re-derived rather than
+                // trusted from Reader claims. The record's own declared satellite participates, so home
+                // read-back records stay authoritative under the one unconditional formula (DEC-20).
                 crate::schema::validate("canonical-record", &record)?;
                 ensure!(
                     record.canonical_id
-                        == canonical_id(&record.source.system, &record.source_record_id),
+                        == canonical_id(
+                            &record.source.system,
+                            record.source.satellite_id.as_deref().unwrap_or(""),
+                            &record.source_record_id
+                        ),
                     "Reader canonical identity mismatch"
                 );
                 if let Some(embedding) = &record.embedding
@@ -943,6 +1011,7 @@ impl Engine {
                 system: source_system.clone(),
                 export_version: "unknown".into(),
                 adapters,
+                satellite: satellite.cloned(),
             },
             source_inventory: SourceInventory {
                 state: if records.is_empty() {
@@ -1051,9 +1120,12 @@ impl Engine {
             "Plan digest mismatch"
         );
         // Re-read execution inputs and reject a stale approval before invoking any Writer write.
+        // The approved satellite identity is part of the execution basis; tampering with it changes
+        // derived canonical IDs and fails the entry/digest comparison below.
         let current = self.prepare(
             Path::new(&approved.source.location),
             approved.gate_policy.clone(),
+            approved.source.satellite.as_ref(),
             approved.previous_receipt_ref.as_deref().map(Path::new),
         )?;
         ensure!(
@@ -1438,17 +1510,28 @@ fn audit_fields(output: &mut ReaderOutput) {
 mod tests {
     use super::*;
 
-    /// Checks repeatability, concatenation separation, and the fixed lowercase base32 ID shape.
+    /// Checks repeatability, concatenation separation, satellite anchoring (DEC-20 R4), and the fixed
+    /// lowercase base32 ID shape; the empty direct-migration satellite still participates in the hash.
     #[test]
     fn identities_are_stable_and_delimited() {
         assert_eq!(
-            canonical_id("markdown", "a.md"),
-            canonical_id("markdown", "a.md")
+            canonical_id("markdown", "aaaaaaa2", "a.md"),
+            canonical_id("markdown", "aaaaaaa2", "a.md")
         );
-        assert_ne!(canonical_id("ab", "c"), canonical_id("a", "bc"));
-        assert_eq!(canonical_id("markdown", "a.md").len(), 32);
+        assert_ne!(canonical_id("ab", "", "c"), canonical_id("a", "", "bc"));
+        assert_ne!(canonical_id("a", "b", "c"), canonical_id("a", "", "bc"));
+        // The same native ID in two satellites must not collide, and direct mode differs from both.
+        assert_ne!(
+            canonical_id("markdown", "aaaaaaa2", "a.md"),
+            canonical_id("markdown", "aaaaaaab", "a.md")
+        );
+        assert_ne!(
+            canonical_id("markdown", "", "a.md"),
+            canonical_id("markdown", "aaaaaaa2", "a.md")
+        );
+        assert_eq!(canonical_id("markdown", "", "a.md").len(), 32);
         assert!(
-            canonical_id("markdown", "a.md")
+            canonical_id("markdown", "", "a.md")
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
         );
@@ -1468,7 +1551,7 @@ mod tests {
     fn omitted_source_fields_are_reported_by_engine() {
         let mut output = ReaderOutput {
             source_records: vec![SourceRecord {
-                canonical_id: canonical_id("synthetic", "synthetic"),
+                canonical_id: canonical_id("synthetic", "", "synthetic"),
                 source_record_id: "synthetic".into(),
                 source_locator: "example.json".into(),
                 fields: serde_json::json!({"content": "synthetic", "unknown": {"a/b": 1}}),
@@ -1503,6 +1586,7 @@ mod tests {
         let first = crate::reader::record(
             "synthetic",
             "test",
+            None,
             "first",
             "first.json",
             "",
@@ -1511,6 +1595,7 @@ mod tests {
         let second = crate::reader::record(
             "synthetic",
             "test",
+            None,
             "second",
             "second.json",
             "",

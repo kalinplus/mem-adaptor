@@ -150,7 +150,20 @@ pub struct AdapterVersion {
     pub version: String,
 }
 
+/// Names a registered satellite that anchors home-mode identity (DEC-20).
+/// The ID is issued once by the home registry and binds receipts to the satellite, not the source path.
+/// The label is display-only and mutable; it never participates in any hash.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SatelliteSpec {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 /// Locates the source and names its export/Reader context; it is not a copy of all source contents.
+/// The optional satellite binds home-mode runs and receipts to a satellite identity;
+/// location remains a presentation and audit field and is absent of satellite meaning in direct migration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceSpec {
@@ -158,6 +171,8 @@ pub struct SourceSpec {
     pub system: String,
     pub export_version: String,
     pub adapters: Vec<AdapterVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub satellite: Option<SatelliteSpec>,
 }
 
 /// Explains which source files were claimed, only registered, or not recognized during planning.

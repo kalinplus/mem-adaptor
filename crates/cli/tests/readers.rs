@@ -34,6 +34,26 @@ fn read(reader: &dyn Reader, files: FileInventory) -> Vec<ReaderOutput> {
     let source = SourceFs {
         root: "/synthetic/source".into(),
         files,
+        satellite_id: None,
+    };
+    reader
+        .claim(&source.files)
+        .iter()
+        .map(|claim| reader.read(claim, &source).unwrap())
+        .collect()
+}
+
+/// Runs the supplied Reader's claims with an explicitly selected run satellite (DEC-20 home mode);
+/// a None satellite_id means direct migration. Parsing failures are test failures, as in `read`.
+fn read_satellite(
+    reader: &dyn Reader,
+    files: FileInventory,
+    satellite_id: Option<&str>,
+) -> Vec<ReaderOutput> {
+    let source = SourceFs {
+        root: "/synthetic/source".into(),
+        files,
+        satellite_id: satellite_id.map(str::to_owned),
     };
     reader
         .claim(&source.files)
@@ -201,6 +221,26 @@ fn claude_code_retains_session_provenance_without_inventing_fact_time() {
     );
 }
 
+/// Checks DEC-20 R8's root-level branch: a Claude Code memory at the vault root has no relative parent,
+/// so the home-mode qualifier is exactly the satellite ID with no trailing slash, while direct mode
+/// keeps its pre-existing plain relative qualifier unchanged by the satellite work.
+#[test]
+fn root_level_claude_code_qualifier_is_satellite_alone_in_home_mode() {
+    let note = "---\nmetadata:\n  node_type: memory\n  type: feedback\n---\nRoot body.\n";
+    let home = read_satellite(
+        &MarkdownReader,
+        files(&[("note.md", note)]),
+        Some("aaaaaaa2"),
+    );
+    assert_eq!(
+        home[0].records[0].scope_qualifier.as_deref(),
+        Some("aaaaaaa2")
+    );
+    // Direct mode keeps the pre-DEC-20 behavior: the plain relative parent, empty at the vault root.
+    let direct = read(&MarkdownReader, files(&[("note.md", note)]));
+    assert_eq!(direct[0].records[0].scope_qualifier.as_deref(), Some(""));
+}
+
 /// Checks original saved-memory IDs, source deletion counts, disabled-memory consent, and alternate JSON wrappers.
 #[test]
 fn chatgpt_saved_memories_keep_ids_and_disabled_consent_and_count_deletions() {
@@ -216,7 +256,7 @@ fn chatgpt_saved_memories_keep_ids_and_disabled_consent_and_count_deletions() {
         .iter()
         .find(|record| record.source_record_id == "synthetic-preference")
         .unwrap();
-    assert_eq!(preference.canonical_id, "eukvwdu6oeaekv3e53j47wqsvoqhagug");
+    assert_eq!(preference.canonical_id, "2bsrwbr7hr2nbtsglpi225eabpbigbhm");
     assert_eq!(preference.dna_class, DnaClass::Dna);
     assert_eq!(
         preference.created_at.as_deref(),
@@ -645,6 +685,7 @@ fn conflicting_original_and_house_metadata_are_not_silently_merged() {
     let source = SourceFs {
         root: "/synthetic/home".into(),
         files: files(&[("memories/note.md", &edited)]),
+        satellite_id: None,
     };
     let claim = MarkdownReader.claim(&source.files).remove(0);
     let error = match MarkdownReader.read(&claim, &source) {
@@ -746,6 +787,7 @@ fn malformed_export_boundaries_fail_without_echoing_sensitive_values() {
         let source = SourceFs {
             root: "/synthetic".into(),
             files: files(&[(name, text)]),
+            satellite_id: None,
         };
         let claims = reader.claim(&source.files);
         assert_eq!(claims.len(), 1);

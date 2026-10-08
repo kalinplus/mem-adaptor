@@ -9,7 +9,7 @@ tags:
 - synthetic
 - 中文
 mem_adaptor:
-  canonical_id: qkwwiq3fhmn5ggrwvlmvdnmixkydyx7x
+  canonical_id: i4qddchtghm45k3wcgh2alzcsh326qn4
   source:
     system: markdown
     adapter_version: "0.1.0"

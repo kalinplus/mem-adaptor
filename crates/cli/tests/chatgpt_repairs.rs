@@ -15,9 +15,10 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 // Independent vectors: "sha256:" + hashlib.sha256(identity).hexdigest(), then lower-case Base32 of
-// hashlib.sha256(b"chatgpt\0" + source_id.encode()).digest()[:20], with no padding.
+// hashlib.sha256(b"chatgpt\0\0" + source_id.encode()).digest()[:20], with no padding;
+// the doubled NUL is the empty direct-migration satellite segment of the DEC-20 formula.
 const PROMPT_ID: &str = "sha256:578e4926b8fbdd607170a09c7e7f4a160dbf31ac1f59a5a0fd7f8c72d8ee37e4";
-const PROMPT_CANONICAL_ID: &str = "jwat6vpradaw5ader6apwe5743ldzcjp";
+const PROMPT_CANONICAL_ID: &str = "ca5fum3xqf3el7ck743uckmfyt4i5j4y";
 const PRIVATE: &str = "synthetic-chatgpt-private-marker";
 
 /// Builds one collection from inline synthetic file bytes without opening user data.
@@ -28,6 +29,7 @@ fn source(entries: &[(&str, &str)]) -> SourceFs {
             .iter()
             .map(|(path, text)| ((*path).into(), text.as_bytes().to_vec()))
             .collect(),
+        satellite_id: None,
     }
 }
 
@@ -541,7 +543,7 @@ fn prompt_dedup_uses_collection_wide_sorted_paths_and_reports_every_discarded_li
     );
     assert_eq!(
         first.records[1].canonical_id,
-        "33623bvpq62mebyheiifzvww22c32gwq"
+        "3tkdvnffaypal452uf3lg5q55fc4un2o"
     );
     assert_eq!(
         first.records[2].source_record_id,
@@ -549,7 +551,7 @@ fn prompt_dedup_uses_collection_wide_sorted_paths_and_reports_every_discarded_li
     );
     assert_eq!(
         first.records[2].canonical_id,
-        "2x5dkjn5r3vunq6e6evprp75y6uowgyt"
+        "yapa6oq5iaebedjas72rr5wgpkivpjlr"
     );
     assert_eq!(
         last.records[0].source_record_id,
@@ -557,7 +559,7 @@ fn prompt_dedup_uses_collection_wide_sorted_paths_and_reports_every_discarded_li
     );
     assert_eq!(
         last.records[0].canonical_id,
-        "h3476yvm4xyavhk7pz4nvlwjjqrc7dub"
+        "vc6yh3ufhc6eh4wx5ha4f6djnndymtv5"
     );
     assert_eq!(last.records[0].source_locator, "z.chatgpt.md:3");
     for (output, path, lines) in [
@@ -708,7 +710,7 @@ fn saved_fields_and_no_id_fallbacks_remain_record_specific() {
     );
     let original = &output.records[0];
     assert_eq!(original.source_record_id, "original-id");
-    assert_eq!(original.canonical_id, "fdzepbuinq5tli6qqeumiqyo3ubtynvb");
+    assert_eq!(original.canonical_id, "zqogaucol6t3mm7ui6nqynv53mjr3uwe");
     assert_eq!(original.content, "Original body.");
     assert_eq!(original.source_kind.as_deref(), Some("preference"));
     assert_eq!(original.dna_class, DnaClass::Dna);
@@ -750,7 +752,7 @@ fn saved_fields_and_no_id_fallbacks_remain_record_specific() {
     );
     assert_eq!(
         output.records[1].canonical_id,
-        "thzn75o2utflhqkiu4ygavfbsgqxzxd3"
+        "aghatespie5g3qpkhcf3fouutpps5ynu"
     );
     assert_eq!(output.records[1].source_kind.as_deref(), Some("tool"));
     assert_eq!(
@@ -763,7 +765,7 @@ fn saved_fields_and_no_id_fallbacks_remain_record_specific() {
     );
     assert_eq!(
         output.records[2].canonical_id,
-        "bcvdwxclmlyme3ecaqmcipwjif7ax4uf"
+        "slk3dxdjdebrjk5243rnzpuhllutqvoz"
     );
     assert_eq!(output.records[2].evidence_level, EvidenceLevel::Inferred);
     assert_eq!(

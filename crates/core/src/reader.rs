@@ -24,21 +24,25 @@ pub fn output() -> ReaderOutput {
 }
 
 /// Builds required identity, body integrity, and import provenance from adapter-supplied source facts.
-/// Uses explicit user/standard/unknown-version defaults and leaves optional semantics absent for the Reader to fill.
+/// The satellite segment anchors identity in home mode (DEC-20); direct migration passes None, which
+/// participates in the hash as the empty string. Uses explicit user/standard/unknown-version defaults
+/// and leaves optional semantics absent for the Reader to fill.
 pub fn record(
     system: &str,
     version: &str,
+    satellite_id: Option<&str>,
     id: &str,
     locator: &str,
     content: &str,
     evidence: EvidenceLevel,
 ) -> CanonicalRecord {
     CanonicalRecord {
-        canonical_id: canonical_id(system, id),
+        canonical_id: canonical_id(system, satellite_id.unwrap_or(""), id),
         source: SourceIdentity {
             system: system.into(),
             adapter_version: version.into(),
             export_version: "unknown".into(),
+            satellite_id: satellite_id.map(str::to_owned),
         },
         source_record_id: id.into(),
         source_locator: locator.into(),

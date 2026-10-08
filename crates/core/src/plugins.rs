@@ -16,9 +16,13 @@ use crate::reports::{
 
 pub type FileInventory = BTreeMap<String, Vec<u8>>;
 
+/// Loaded source directory and its file inventory, plus the satellite identity selected for this run.
+/// The engine stamps satellite_id for home-mode runs (DEC-20); None means direct migration.
+/// Readers use it to anchor record identity and scope qualifiers; they never derive or register it.
 pub struct SourceFs {
     pub root: PathBuf,
     pub files: FileInventory,
+    pub satellite_id: Option<String>,
 }
 
 impl SourceFs {

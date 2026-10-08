@@ -138,6 +138,7 @@ impl MarkdownReader {
         record = normalize::record(
             system,
             self.version(),
+            source.satellite_id.as_deref(),
             &claim.path,
             &claim.path,
             body,
@@ -162,7 +163,15 @@ impl MarkdownReader {
             let slug = components.windows(3).find_map(|parts| {
                 (parts[0] == "projects" && parts[2] == "memory").then_some(parts[1])
             });
-            record.scope_qualifier = Some(slug.unwrap_or(parent).into());
+            let relative = slug.unwrap_or(parent);
+            // Home mode anchors the project qualifier to the satellite (DEC-20) so identical relative
+            // projects in different satellites stay distinguishable; direct mode keeps the plain
+            // relative qualifier. A root-level file has no relative part and keeps the satellite alone.
+            record.scope_qualifier = Some(match &source.satellite_id {
+                Some(satellite) if relative.is_empty() => satellite.clone(),
+                Some(satellite) => format!("{satellite}/{relative}"),
+                None => relative.into(),
+            });
             if slug.is_none() {
                 normalize::anomaly(
                     &mut output,

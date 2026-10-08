@@ -51,6 +51,7 @@ fn record() -> CanonicalRecord {
     let mut record = normalize::record(
         "synthetic-writer",
         "test",
+        None,
         "original-id",
         "synthetic.json",
         "\n# 合成标题\n\nKeep this body.\r\n",
@@ -277,6 +278,7 @@ fn okf_native_fields_index_and_log_are_honest_and_round_trip() {
         files: [(format!("{target_id}.md"), text.into_bytes())]
             .into_iter()
             .collect(),
+        satellite_id: None,
     };
     let output = MarkdownReader
         .read(&MarkdownReader.claim(&source.files)[0], &source)
@@ -615,7 +617,7 @@ fn source_created_time_and_embedding_vectors_round_trip_through_ump() {
         vector: Some(vec![0.1, 0.2]),
         normalized: None,
     });
-    original.canonical_id = canonical_id("synthetic-writer", &original.source_record_id);
+    original.canonical_id = canonical_id("synthetic-writer", "", &original.source_record_id);
     let engine = engine(&directory, original.clone(), "ump");
     let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
     let native = ump(&directory);
@@ -789,6 +791,7 @@ fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
         let source = SourceFs {
             root: "/synthetic".into(),
             files: [(path.clone(), edited.into_bytes())].into_iter().collect(),
+            satellite_id: None,
         };
         let before = target_snapshot(&directory.path().join("target"));
         let input = source.files.clone();

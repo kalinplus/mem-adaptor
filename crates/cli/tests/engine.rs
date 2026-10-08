@@ -1,15 +1,19 @@
 //! Exercises core planning and receipt behavior with synthetic Readers and an isolated OKF target.
 //! Reader-controlled records expose identity, metadata, governance, and history boundaries without real exports.
+//! A closing section covers DEC-20 satellite identity: three-segment canonical IDs, satellite-prefixed
+//! scope qualifiers, and receipt attribution by satellite ID (home mode) versus source path (direct mode).
 //! Assertions prove only their stated scenarios; these implementation-based tests are not independent conformance.
 //! Sections group validation, field coverage, deduplication, and governance/history scenarios for reading, not execution order.
 
 use std::fs;
+use std::path::Path;
 
 use mem_adaptor_core::canonical::*;
 use mem_adaptor_core::engine::{Engine, canonical_id, content_hash, timestamp, write_json_new};
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
+use mem_adaptor_reader_markdown::MarkdownReader;
 use mem_adaptor_writer_okf::OkfWriter;
 use serde_json::json;
 use tempfile::TempDir;
@@ -53,7 +57,7 @@ impl Reader for CrossSystemReader {
         ] {
             let mut canonical = record("shared-native-id");
             canonical.source.system = system.into();
-            canonical.canonical_id = canonical_id(system, &canonical.source_record_id);
+            canonical.canonical_id = canonical_id(system, "", &canonical.source_record_id);
             let mut source = mem_adaptor_core::reader::source(&canonical, &claim.path, fields);
             mem_adaptor_core::reader::map(&mut source, "/body", "/content");
             output.source_records.push(source);
@@ -110,7 +114,7 @@ fn record(id: &str) -> CanonicalRecord {
     record.source.system = "synthetic".into();
     record.source_record_id = id.into();
     record.source_locator = "fixture.json".into();
-    record.canonical_id = canonical_id("synthetic", id);
+    record.canonical_id = canonical_id("synthetic", "", id);
     record.content_hash = content_hash(record.content.as_bytes());
     record
 }
@@ -272,12 +276,12 @@ fn native_id_collisions_do_not_cross_contaminate_findings_references_or_mappings
     let left = report
         .entries
         .iter()
-        .find(|entry| entry.canonical_id == canonical_id("left", "shared-native-id"))
+        .find(|entry| entry.canonical_id == canonical_id("left", "", "shared-native-id"))
         .unwrap();
     let right = report
         .entries
         .iter()
-        .find(|entry| entry.canonical_id == canonical_id("right", "shared-native-id"))
+        .find(|entry| entry.canonical_id == canonical_id("right", "", "shared-native-id"))
         .unwrap();
     assert_eq!(
         left.disposition,
@@ -399,7 +403,7 @@ fn prior_verdict_is_reused_but_does_not_override_secret_blocking() {
     let mut receipt = apply(&engine, &plan);
     receipt.verdicts = vec![Verdict::Keep {
         cluster_id: cluster.clone(),
-        canonical_ids: vec![canonical_id("synthetic", "other")],
+        canonical_ids: vec![canonical_id("synthetic", "", "other")],
     }];
     let previous = directory.path().join("previous.json");
     write_json_new(&previous, &receipt).unwrap();
@@ -534,4 +538,380 @@ fn metadata_updates_are_written_and_consent_disables_export() {
             .unwrap();
         assert_eq!(report.entries[0].disposition, expected);
     }
+}
+
+// Satellite identity (DEC-20): home-mode identity, qualifiers, and receipt chains anchor to the satellite ID.
+
+/// Relative note path shared by every synthetic vault; two vaults must not derive the same record identity.
+const VAULT_NOTE: &str = "projects/demo/memory/note.md";
+
+/// Claude Code-style memory document; its frontmatter metadata selects the claude_code source system.
+const VAULT_TEXT: &str =
+    "---\nmetadata:\n  node_type: memory\n  type: feedback\n---\nSynthetic vault body.\n";
+
+/// Creates an isolated satellite vault at a fresh temporary path; the home target stays caller-controlled.
+fn vault() -> TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let memory = directory.path().join("source/projects/demo/memory");
+    fs::create_dir_all(&memory).unwrap();
+    fs::write(memory.join("note.md"), VAULT_TEXT).unwrap();
+    directory
+}
+
+/// Registers the Markdown Reader with an OKF Writer confined to the caller-supplied home target path.
+/// Separate vaults sharing one home mirror real home mode: satellites move, the home does not.
+fn vault_engine(home: &Path) -> Engine {
+    let mut registry = Registry::default();
+    registry.register_reader(MarkdownReader).unwrap();
+    registry
+        .register_writer("home".into(), OkfWriter::new(home.to_path_buf()).unwrap())
+        .unwrap();
+    Engine { registry }
+}
+
+/// Checks DEC-20 R4/R8: the same relative note path under two satellites yields different canonical IDs,
+/// satellite-prefixed scope qualifiers, and satellite-bound plan reports; direct mode differs from both.
+#[test]
+fn satellite_identity_anchors_ids_qualifiers_and_plan_reports() {
+    let alpha = SatelliteSpec {
+        id: "aaaaaaa2".into(),
+        label: Some("Alpha vault".into()),
+    };
+    let beta = SatelliteSpec {
+        id: "aaaaaaab".into(),
+        label: None,
+    };
+    let first = vault();
+    let second = vault();
+    let first_plan = vault_engine(&first.path().join("target"))
+        .plan_with_satellite(&first.path().join("source"), policy(), &alpha, None)
+        .unwrap();
+    let second_plan = vault_engine(&second.path().join("target"))
+        .plan_with_satellite(&second.path().join("source"), policy(), &beta, None)
+        .unwrap();
+    let direct = vault_engine(&first.path().join("target"))
+        .plan(&first.path().join("source"), policy())
+        .unwrap();
+    let expected = |satellite: &str| canonical_id("claude_code", satellite, VAULT_NOTE);
+    assert_eq!(first_plan.entries[0].canonical_id, expected("aaaaaaa2"));
+    assert_eq!(second_plan.entries[0].canonical_id, expected("aaaaaaab"));
+    assert_eq!(direct.entries[0].canonical_id, expected(""));
+    assert_ne!(
+        first_plan.entries[0].canonical_id,
+        second_plan.entries[0].canonical_id
+    );
+    assert_eq!(first_plan.source.satellite, Some(alpha.clone()));
+    assert_eq!(second_plan.source.satellite, Some(beta));
+    assert!(direct.source.satellite.is_none());
+    assert_ne!(first_plan.plan_digest, second_plan.plan_digest);
+    assert_ne!(first_plan.plan_digest, direct.plan_digest);
+    // R8: the home-mode qualifier carries the satellite prefix over the relative project slug;
+    // direct mode keeps the plain slug. Both are reader-level facts, checked without an engine run.
+    let qualifier = |satellite_id: Option<&str>| {
+        let source = SourceFs {
+            root: "/synthetic/vault".into(),
+            files: [(VAULT_NOTE.to_owned(), VAULT_TEXT.as_bytes().to_vec())]
+                .into_iter()
+                .collect(),
+            satellite_id: satellite_id.map(str::to_owned),
+        };
+        let claim = Claim {
+            path: VAULT_NOTE.into(),
+            layer: "auto_memory".into(),
+            registered_only: false,
+        };
+        MarkdownReader
+            .read(&claim, &source)
+            .unwrap()
+            .records
+            .remove(0)
+            .scope_qualifier
+    };
+    assert_eq!(
+        qualifier(Some("aaaaaaa2")).as_deref(),
+        Some("aaaaaaa2/demo")
+    );
+    assert_eq!(qualifier(None).as_deref(), Some("demo"));
+}
+
+/// Checks DEC-20 R7: home-mode receipt ownership binds to the satellite ID, so moving the vault keeps the
+/// history chain, while another satellite or a direct-mode receipt is rejected. Direct-mode receipts keep
+/// the old path binding: rejected at a moved path, accepted at the same path, and never valid for home mode.
+#[test]
+fn receipts_bind_to_satellite_id_in_home_mode_and_to_location_in_direct_mode() {
+    let alpha = SatelliteSpec {
+        id: "aaaaaaa2".into(),
+        label: Some("Alpha vault".into()),
+    };
+    let beta = SatelliteSpec {
+        id: "aaaaaaab".into(),
+        label: None,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let original = vault();
+    let engine = vault_engine(home.path());
+    let plan = engine
+        .plan_with_satellite(&original.path().join("source"), policy(), &alpha, None)
+        .unwrap();
+    let receipt = apply(&engine, &plan);
+    assert_eq!(receipt.source.satellite, Some(alpha.clone()));
+    assert_eq!(
+        receipt.entries[0].verification,
+        Some(Verification::Verified)
+    );
+    let previous = original.path().join("previous.json");
+    write_json_new(&previous, &receipt).unwrap();
+
+    // The same satellite at a new source path continues the chain against the unchanged home.
+    let moved = vault();
+    let moved_engine = vault_engine(home.path());
+    let moved_plan = moved_engine
+        .plan_with_satellite(
+            &moved.path().join("source"),
+            policy(),
+            &alpha,
+            Some(&previous),
+        )
+        .unwrap();
+    assert_eq!(
+        moved_plan.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        }
+    );
+    assert!(!moved.path().join("target").exists());
+
+    // Another satellite must not consume the receipt, even with identical source contents.
+    let error = moved_engine
+        .plan_with_satellite(
+            &moved.path().join("source"),
+            policy(),
+            &beta,
+            Some(&previous),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Previous receipt belongs to another satellite")
+    );
+
+    // A direct-mode receipt never satisfies a satellite run, and binds by location in direct runs.
+    let direct_directory = vault();
+    let direct_engine = vault_engine(&direct_directory.path().join("target"));
+    let direct_plan = direct_engine
+        .plan(&direct_directory.path().join("source"), policy())
+        .unwrap();
+    let direct_receipt = apply(&direct_engine, &direct_plan);
+    assert!(direct_receipt.source.satellite.is_none());
+    let direct_previous = direct_directory.path().join("direct.json");
+    write_json_new(&direct_previous, &direct_receipt).unwrap();
+    let error = moved_engine
+        .plan_with_satellite(
+            &moved.path().join("source"),
+            policy(),
+            &alpha,
+            Some(&direct_previous),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Previous receipt belongs to another satellite")
+    );
+    let error = vault_engine(&moved.path().join("target"))
+        .plan_with_previous(
+            &moved.path().join("source"),
+            policy(),
+            Some(&direct_previous),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Previous receipt belongs to another source")
+    );
+    let reused = vault_engine(&direct_directory.path().join("target"))
+        .plan_with_previous(
+            &direct_directory.path().join("source"),
+            policy(),
+            Some(&direct_previous),
+        )
+        .unwrap();
+    assert_eq!(
+        reused.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        }
+    );
+}
+
+/// Checks malformed satellite identities are rejected before inventory or planning; no target is created.
+#[test]
+fn malformed_satellite_specs_reject_before_any_writes() {
+    let directory = vault();
+    for satellite in [
+        SatelliteSpec {
+            id: "AAAAAAA2".into(),
+            label: None,
+        },
+        SatelliteSpec {
+            id: "aaaaaa12".into(),
+            label: None,
+        },
+        SatelliteSpec {
+            id: "aaaaaaa".into(),
+            label: None,
+        },
+        SatelliteSpec {
+            id: "aaaaaaa23".into(),
+            label: None,
+        },
+        SatelliteSpec {
+            id: "aaaaaaa2".into(),
+            label: Some("".into()),
+        },
+    ] {
+        let error = vault_engine(&directory.path().join("target"))
+            .plan_with_satellite(&directory.path().join("source"), policy(), &satellite, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("Satellite"));
+        assert!(!directory.path().join("target").exists());
+    }
+}
+
+/// Recursively captures every regular file's relative path and bytes under a root for fault assertions.
+fn target_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        if !directory.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    files
+}
+
+/// Checks a satellite receipt never serves as direct-mode history, even at the same source location:
+/// the identity regimes differ, so planning stops before any write and the home keeps its exact bytes.
+#[test]
+fn direct_runs_reject_satellite_receipts_as_previous_history() {
+    let alpha = SatelliteSpec {
+        id: "aaaaaaa2".into(),
+        label: Some("Alpha vault".into()),
+    };
+    let directory = vault();
+    let home = directory.path().join("target");
+    let engine = vault_engine(&home);
+    let plan = engine
+        .plan_with_satellite(&directory.path().join("source"), policy(), &alpha, None)
+        .unwrap();
+    let receipt = apply(&engine, &plan);
+    assert_eq!(receipt.source.satellite, Some(alpha));
+    let previous = directory.path().join("previous.json");
+    write_json_new(&previous, &receipt).unwrap();
+    let before = target_snapshot(&home);
+    let error = vault_engine(&home)
+        .plan_with_previous(&directory.path().join("source"), policy(), Some(&previous))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Previous receipt belongs to a satellite run")
+    );
+    // The rejection happened before planning completed: no target byte changed and the rejected
+    // run produced no report artifacts of its own; the satellite receipt stays untouched.
+    assert_eq!(target_snapshot(&home), before);
+    let stored: ReceiptReport = serde_json::from_slice(&fs::read(&previous).unwrap()).unwrap();
+    assert_eq!(stored, receipt);
+}
+
+/// Checks the #19 R4 regression end to end: after satellite alpha populates the shared home, satellite
+/// beta plans and applies against the same home without history and is accepted under its own identity
+/// — no target_untracked, no "another source" rejection. Alpha's memory file stays byte-identical, beta
+/// adds its own file, each receipt binds its own satellite, and beta's rerun with its own receipt
+/// continues its own chain. Shared-artifact (index/log) reconciliation is Issue #33, not asserted here.
+#[test]
+fn second_satellite_merges_into_shared_home_without_false_rejection() {
+    let alpha = SatelliteSpec {
+        id: "aaaaaaa2".into(),
+        label: Some("Alpha vault".into()),
+    };
+    let beta = SatelliteSpec {
+        id: "aaaaaaab".into(),
+        label: Some("Beta vault".into()),
+    };
+    let home = tempfile::tempdir().unwrap();
+    let alpha_vault = vault();
+    let alpha_engine = vault_engine(home.path());
+    let alpha_plan = alpha_engine
+        .plan_with_satellite(&alpha_vault.path().join("source"), policy(), &alpha, None)
+        .unwrap();
+    let alpha_receipt = apply(&alpha_engine, &alpha_plan);
+    assert_eq!(alpha_receipt.source.satellite, Some(alpha));
+    assert_eq!(
+        alpha_receipt.entries[0].verification,
+        Some(Verification::Verified)
+    );
+
+    // The second satellite has the same relative note path but derives its own identity, so the
+    // alpha-populated home neither shadows it (target_untracked) nor rejects the run.
+    let beta_vault = vault();
+    let alpha_file = home.path().join(format!(
+        "memories/{}.md",
+        canonical_id("claude_code", "aaaaaaa2", VAULT_NOTE)
+    ));
+    let alpha_bytes = fs::read(&alpha_file).unwrap();
+    let beta_engine = vault_engine(home.path());
+    let beta_plan = beta_engine
+        .plan_with_satellite(&beta_vault.path().join("source"), policy(), &beta, None)
+        .unwrap();
+    assert_eq!(
+        beta_plan.entries[0].canonical_id,
+        canonical_id("claude_code", "aaaaaaab", VAULT_NOTE)
+    );
+    assert_eq!(beta_plan.entries[0].disposition, Disposition::Accepted);
+    let beta_receipt = apply(&beta_engine, &beta_plan);
+    assert_eq!(beta_receipt.source.satellite, Some(beta.clone()));
+    assert_eq!(
+        beta_receipt.entries[0].verification,
+        Some(Verification::Verified)
+    );
+    assert_eq!(fs::read(&alpha_file).unwrap(), alpha_bytes);
+    let beta_file = home.path().join(format!(
+        "memories/{}.md",
+        canonical_id("claude_code", "aaaaaaab", VAULT_NOTE)
+    ));
+    assert!(beta_file.exists());
+
+    // Beta's next run consumes beta's own receipt and rewrites nothing in the shared home.
+    let beta_previous = beta_vault.path().join("beta-receipt.json");
+    write_json_new(&beta_previous, &beta_receipt).unwrap();
+    let before = target_snapshot(home.path());
+    let rerun = vault_engine(home.path())
+        .plan_with_satellite(
+            &beta_vault.path().join("source"),
+            policy(),
+            &beta,
+            Some(&beta_previous),
+        )
+        .unwrap();
+    assert_eq!(
+        rerun.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        }
+    );
+    assert_eq!(target_snapshot(home.path()), before);
 }

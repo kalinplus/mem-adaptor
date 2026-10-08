@@ -61,6 +61,7 @@ fn record(id: &str, body: &str) -> CanonicalRecord {
     source::record(
         "okf-repair-test",
         "test",
+        None,
         id,
         "synthetic.json",
         body,
@@ -251,6 +252,7 @@ fn standalone_delimiters_preserve_typed_metadata_and_crlf_updates() {
         )]
         .into_iter()
         .collect(),
+        satellite_id: None,
     };
     let read = MarkdownReader
         .read(&MarkdownReader.claim(&source_fs.files)[0], &source_fs)
@@ -444,6 +446,7 @@ fn native_index_and_log_follow_format_and_two_round_counts() {
         ]
         .into_iter()
         .collect(),
+        satellite_id: None,
     };
     let claims = MarkdownReader.claim(&source_fs.files);
     assert_eq!(claims.len(), 2);
@@ -601,6 +604,41 @@ fn corrupt_managed_source_identity_rejects_unrelated_plan_without_changes() {
     let text = note(&directory, &original.canonical_id);
     let (mut metadata, body) = native(&text);
     metadata["mem_adaptor"]["source_record_id"] = json!("different-source-record");
+    fs::write(
+        directory
+            .path()
+            .join(format!("target/memories/{}.md", original.canonical_id)),
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let before = snapshot(&directory.path().join("target"));
+    let engine = okf_engine(
+        &directory,
+        vec![record("unrelated", "Other distinct body.\n")],
+    );
+    let error = engine
+        .plan(&directory.path().join("source"), policy())
+        .unwrap_err();
+    assert!(format!("{error:#}").to_lowercase().contains("identity"));
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+    assert!(!directory.path().join("synthetic-approval.json").exists());
+    assert!(!directory.path().join("synthetic-receipt.json").exists());
+}
+
+/// Refuses a managed envelope whose stored satellite ID disagrees with its own canonical identity (DEC-20);
+/// the stored satellite participates in the consistency check, so corrupting it alone is already a mismatch.
+#[test]
+fn corrupt_managed_satellite_id_rejects_unrelated_plan_without_changes() {
+    let directory = fixture();
+    let original = record("old", "Existing managed body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let text = note(&directory, &original.canonical_id);
+    let (mut metadata, body) = native(&text);
+    metadata["mem_adaptor"]["source"]["satellite_id"] = json!("aaaaaaa2");
     fs::write(
         directory
             .path()

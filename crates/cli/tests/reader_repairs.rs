@@ -25,6 +25,7 @@ fn source(entries: &[(&str, &[u8])]) -> SourceFs {
             .iter()
             .map(|(path, bytes)| (path.to_string(), bytes.to_vec()))
             .collect(),
+        satellite_id: None,
     }
 }
 
@@ -240,7 +241,7 @@ fn claude_content_types_and_unused_uuid_have_truthful_dispositions() {
         assert_eq!(output[0].records.len(), 1);
         assert_eq!(
             output[0].records[0].canonical_id,
-            "hap4aulrc2ch4hissrhi3egjkdt32ez3"
+            "kpjnewi7lsogcvyfzl2hifl7mwewmzt5"
         );
         assert_eq!(
             output[0].records[0].source_extra.as_ref().unwrap()["project"]["uuid"],
@@ -651,23 +652,23 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
             "chatgpt",
             vec![
                 (
-                    "eukvwdu6oeaekv3e53j47wqsvoqhagug",
+                    "2bsrwbr7hr2nbtsglpi225eabpbigbhm",
                     "Prefer concise answers.",
                 ),
                 (
-                    "opse6at2wcmn2ljgsbg5a3kjmamjn2cl",
+                    "qsrxnpzmv5ig6ese5cl3fe4dqiumgj3k",
                     "Synthetic occupation: test engineer.",
                 ),
                 (
-                    "5lcv2xedf4vciv6v3if7ezgbzqglqxke",
+                    "kuzbyrywvjhtcqe4sxysd5knsikvtl6d",
                     "Preserve my original words.",
                 ),
                 (
-                    "32cceomezamquevdonig4ogb53zjcnlr",
+                    "li4pe5tr6ox2jedsc5b346krfv3cmbtg",
                     "Synthetic date must not become midnight.",
                 ),
                 (
-                    "6ggjlsblxwaxcfjtjvhxa4lhfuiqudnx",
+                    "gczvrx44fd7oiblua36iuwl3gqffd4e6",
                     "Keep this unknown category.",
                 ),
             ],
@@ -676,20 +677,20 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
             "claude",
             vec![
                 (
-                    "wu6zsktshjtpsgdytbiazlhhac5sl6zl",
+                    "v3tnngptwkwcqiqf5r44u7bakp7jp2qi",
                     "---\ntype: profile\nname: Synthetic identity\n---\nKeep the entire synthetic file.\r\n",
                 ),
                 (
-                    "xktad6y2ayonwcxljg72poyrdd7lc5it",
+                    "j4rhy3vfmcydtdol4d7lpeosohpvrsa5",
                     "Plain synthetic project context.",
                 ),
                 (
-                    "siamu5szm6su2ioij7jjxe3vldv4ggfg",
+                    "4j7k72aopijct757zovgilfyc6ihekpd",
                     "Synthetic knowledge document.\n",
                 ),
-                ("nebih2apfdmfv43eeyz6w2saemupokoz", ""),
+                ("6nxnndc4s6g3n77lxajyzjuschtdbbj6", ""),
                 (
-                    "7rxfs636okgp2kd676indkpori3mtxru",
+                    "wkoezyvlsbpwi2dcshbshybidzph3jki",
                     "Follow these synthetic project instructions.\n",
                 ),
             ],
