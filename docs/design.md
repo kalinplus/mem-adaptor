@@ -596,6 +596,7 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
     .mem-adaptor/config.toml         # init 时写入：闸门策略（DEC-1）等；卫星登记表在 apply 批准后追加（DEC-20）
     memories/<canonical_id>.md       # 平铺；路径即 Concept ID，不编码 scope 等可变属性
     .mem-adaptor/receipts/<卫星 ID>/<运行 id>.json   # 回执报告，随家走（换机器不丢防复活状态）；卫星身份见 DEC-20
+    .mem-adaptor/plans/<卫星 ID>/<运行 id>.json      # 家模式计划报告的默认落位；`.mem-adaptor/` 不是记忆源，读家目录时排除
   ```
 
 - **字段落位**：能用 OKF 标准字段的就用标准字段，其余进一个命名空间扩展块；

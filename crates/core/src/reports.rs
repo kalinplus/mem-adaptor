@@ -328,6 +328,9 @@ pub struct DigestInputs {
     /// Binds every fact carried from the exact loaded receipt, including records absent from this source round.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_receipt_hash: Option<String>,
+    /// Binds the exact shared-artifact basis receipt this plan reconciled against (DEC-19 shared artifacts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_basis_hash: Option<String>,
 }
 
 /// Records source-file hashes for change checks without copying the source bundle into the report.
@@ -396,6 +399,9 @@ pub struct PlanReport {
     pub plan_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_receipt_ref: Option<String>,
+    /// Path of the shared-artifact basis receipt this plan reconciled shared products against (DEC-19).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_basis_ref: Option<String>,
 }
 
 /// Associates actual treatment with record/target identity and optional current verification.

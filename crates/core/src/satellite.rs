@@ -542,7 +542,7 @@ pub fn latest_receipts(
 }
 
 /// Loads and validates one receipt file; structural validity, not write success, is what this checks.
-fn read_receipt(path: &Path) -> Result<ReceiptReport> {
+pub fn read_receipt(path: &Path) -> Result<ReceiptReport> {
     let bytes = fs::read(path)?;
     let receipt: ReceiptReport = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("Invalid receipt JSON or fields"))

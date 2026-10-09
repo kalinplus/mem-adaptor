@@ -80,6 +80,8 @@
     {"base": "valid/config.json", "constraint": "registry entries record their issuance time", "patch": [{"op": "remove", "path": "/satellites/0/created_at"}]},
     {"base": "valid/config.json", "constraint": "registry issuance time is RFC 3339, not a date alone", "patch": [{"op": "add", "path": "/satellites/0/created_at", "value": "2026-10-05"}]},
     {"base": "valid/config.json", "constraint": "registry display labels are nonempty", "patch": [{"op": "add", "path": "/satellites/0/label", "value": ""}]},
-    {"base": "valid/config.json", "constraint": "an export bundle registers no path rather than an empty one", "patch": [{"op": "add", "path": "/satellites/1/path", "value": ""}]}
+    {"base": "valid/config.json", "constraint": "an export bundle registers no path rather than an empty one", "patch": [{"op": "add", "path": "/satellites/1/path", "value": ""}]},
+    {"base": "valid/plan.json", "constraint": "the shared-basis reference is a nonempty path", "patch": [{"op": "add", "path": "/shared_basis_ref", "value": ""}]},
+    {"base": "valid/plan.json", "constraint": "the shared-basis hash is a hex digest, not prose", "patch": [{"op": "add", "path": "/digest_inputs/shared_basis_hash", "value": "not-a-hash"}]}
   ]
 }

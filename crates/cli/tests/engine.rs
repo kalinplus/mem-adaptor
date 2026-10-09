@@ -592,10 +592,10 @@ fn satellite_identity_anchors_ids_qualifiers_and_plan_reports() {
     let first = vault();
     let second = vault();
     let first_plan = vault_engine(&first.path().join("target"))
-        .plan_with_satellite(&first.path().join("source"), policy(), &alpha, None)
+        .plan_with_satellite(&first.path().join("source"), policy(), &alpha, None, None)
         .unwrap();
     let second_plan = vault_engine(&second.path().join("target"))
-        .plan_with_satellite(&second.path().join("source"), policy(), &beta, None)
+        .plan_with_satellite(&second.path().join("source"), policy(), &beta, None, None)
         .unwrap();
     let direct = vault_engine(&first.path().join("target"))
         .plan(&first.path().join("source"), policy())
@@ -659,7 +659,13 @@ fn receipts_bind_to_satellite_id_in_home_mode_and_to_location_in_direct_mode() {
     let original = vault();
     let engine = vault_engine(home.path());
     let plan = engine
-        .plan_with_satellite(&original.path().join("source"), policy(), &alpha, None)
+        .plan_with_satellite(
+            &original.path().join("source"),
+            policy(),
+            &alpha,
+            None,
+            None,
+        )
         .unwrap();
     let receipt = apply(&engine, &plan);
     assert_eq!(receipt.source.satellite, Some(alpha.clone()));
@@ -679,6 +685,7 @@ fn receipts_bind_to_satellite_id_in_home_mode_and_to_location_in_direct_mode() {
             policy(),
             &alpha,
             Some(&previous),
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -696,6 +703,7 @@ fn receipts_bind_to_satellite_id_in_home_mode_and_to_location_in_direct_mode() {
             policy(),
             &beta,
             Some(&previous),
+            None,
         )
         .unwrap_err();
     assert!(
@@ -720,6 +728,7 @@ fn receipts_bind_to_satellite_id_in_home_mode_and_to_location_in_direct_mode() {
             policy(),
             &alpha,
             Some(&direct_previous),
+            None,
         )
         .unwrap_err();
     assert!(
@@ -781,7 +790,13 @@ fn malformed_satellite_specs_reject_before_any_writes() {
         },
     ] {
         let error = vault_engine(&directory.path().join("target"))
-            .plan_with_satellite(&directory.path().join("source"), policy(), &satellite, None)
+            .plan_with_satellite(
+                &directory.path().join("source"),
+                policy(),
+                &satellite,
+                None,
+                None,
+            )
             .unwrap_err();
         assert!(error.to_string().contains("Satellite"));
         assert!(!directory.path().join("target").exists());
@@ -823,7 +838,13 @@ fn direct_runs_reject_satellite_receipts_as_previous_history() {
     let home = directory.path().join("target");
     let engine = vault_engine(&home);
     let plan = engine
-        .plan_with_satellite(&directory.path().join("source"), policy(), &alpha, None)
+        .plan_with_satellite(
+            &directory.path().join("source"),
+            policy(),
+            &alpha,
+            None,
+            None,
+        )
         .unwrap();
     let receipt = apply(&engine, &plan);
     assert_eq!(receipt.source.satellite, Some(alpha));
@@ -864,7 +885,13 @@ fn second_satellite_merges_into_shared_home_without_false_rejection() {
     let alpha_vault = vault();
     let alpha_engine = vault_engine(home.path());
     let alpha_plan = alpha_engine
-        .plan_with_satellite(&alpha_vault.path().join("source"), policy(), &alpha, None)
+        .plan_with_satellite(
+            &alpha_vault.path().join("source"),
+            policy(),
+            &alpha,
+            None,
+            None,
+        )
         .unwrap();
     let alpha_receipt = apply(&alpha_engine, &alpha_plan);
     assert_eq!(alpha_receipt.source.satellite, Some(alpha));
@@ -883,7 +910,13 @@ fn second_satellite_merges_into_shared_home_without_false_rejection() {
     let alpha_bytes = fs::read(&alpha_file).unwrap();
     let beta_engine = vault_engine(home.path());
     let beta_plan = beta_engine
-        .plan_with_satellite(&beta_vault.path().join("source"), policy(), &beta, None)
+        .plan_with_satellite(
+            &beta_vault.path().join("source"),
+            policy(),
+            &beta,
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(
         beta_plan.entries[0].canonical_id,
@@ -913,6 +946,7 @@ fn second_satellite_merges_into_shared_home_without_false_rejection() {
             policy(),
             &beta,
             Some(&beta_previous),
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -922,4 +956,237 @@ fn second_satellite_merges_into_shared_home_without_false_rejection() {
         }
     );
     assert_eq!(target_snapshot(home.path()), before);
+}
+
+/// Checks #33 (DEC-19 shared products): after beta's verified write advances the shared index/log, alpha
+/// re-plans against the same home. With beta's latest verified receipt as the shared basis alpha
+/// reconciles against the real disk state and continues its chain; without one the single-chain fallback
+/// mistakes beta's write for tampering. A user edit of a shared artifact refuses with the same basis, and
+/// a rollback to an older snapshot never passes while the basis is the latest verified receipt — the
+/// fallback alone cannot see that rollback, which is why the CLI supplies a basis in home mode.
+#[test]
+fn shared_basis_reconciles_cross_satellite_writes_and_refuses_edits_and_rollbacks() {
+    let alpha = SatelliteSpec {
+        id: "aaaaaaa2".into(),
+        label: Some("Alpha vault".into()),
+    };
+    let beta = SatelliteSpec {
+        id: "aaaaaaab".into(),
+        label: Some("Beta vault".into()),
+    };
+    let home = tempfile::tempdir().unwrap();
+    let alpha_engine = vault_engine(home.path());
+    let alpha_vault = vault();
+    let alpha_plan = alpha_engine
+        .plan_with_satellite(
+            &alpha_vault.path().join("source"),
+            policy(),
+            &alpha,
+            None,
+            None,
+        )
+        .unwrap();
+    let alpha_receipt = apply(&alpha_engine, &alpha_plan);
+    let index_after_alpha = fs::read(home.path().join("index.md")).unwrap();
+    let log_after_alpha = fs::read(home.path().join("log.md")).unwrap();
+
+    let beta_vault = vault();
+    let beta_engine = vault_engine(home.path());
+    let beta_plan = beta_engine
+        .plan_with_satellite(
+            &beta_vault.path().join("source"),
+            policy(),
+            &beta,
+            None,
+            None,
+        )
+        .unwrap();
+    let beta_receipt = apply(&beta_engine, &beta_plan);
+
+    let history = tempfile::tempdir().unwrap();
+    let alpha_previous = history.path().join("alpha.json");
+    write_json_new(&alpha_previous, &alpha_receipt).unwrap();
+    let beta_basis = history.path().join("beta.json");
+    write_json_new(&beta_basis, &beta_receipt).unwrap();
+
+    // Without a basis the single-chain check refuses what beta legitimately wrote.
+    let engine = vault_engine(home.path());
+    let source = alpha_vault.path().join("source");
+    let fallback = engine
+        .plan_with_satellite(&source, policy(), &alpha, Some(&alpha_previous), None)
+        .unwrap();
+    assert!(fallback.entries.iter().all(|entry| entry.disposition
+        == Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified,
+        }));
+
+    // With the latest verified receipt as the basis, alpha's chain continues over beta's advance.
+    let reconciled = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&beta_basis),
+        )
+        .unwrap();
+    assert_eq!(
+        reconciled.shared_basis_ref.as_deref(),
+        Some(beta_basis.to_str().unwrap())
+    );
+    assert!(reconciled.digest_inputs.shared_basis_hash.is_some());
+    assert!(reconciled.entries.iter().all(|entry| entry.disposition
+        == Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated,
+        }));
+    // The all-omitted apply writes nothing, so the shared state still equals the basis afterwards.
+    let reconciled_receipt = apply(&engine, &reconciled);
+    assert_eq!(reconciled_receipt.source.satellite, Some(alpha.clone()));
+    // A run with no verified entry carries the previous shared artifacts forward instead of claiming a
+    // fresh projection, so it can never be mistaken for a shared-state advance.
+    let carried = |receipt: &ReceiptReport| {
+        receipt
+            .targets
+            .iter()
+            .flat_map(|target| &target.artifacts)
+            .find(|artifact| artifact.path == "index.md")
+            .unwrap()
+            .content_hash
+            .clone()
+    };
+    assert_eq!(carried(&reconciled_receipt), carried(&alpha_receipt));
+
+    // A basis that fails qualification is refused: wrong location, or no verified entry for the target.
+    let misplaced = history.path().join("misplaced.json");
+    let mut edited_receipt = serde_json::to_value(&beta_receipt).unwrap();
+    edited_receipt["targets"][0]["location"] = json!("/somewhere/else");
+    write_json_new(&misplaced, &edited_receipt).unwrap();
+    let error = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&misplaced),
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("points at another location"),
+        "{error}"
+    );
+    let unverified = history.path().join("unverified.json");
+    let mut edited_receipt = serde_json::to_value(&beta_receipt).unwrap();
+    for entry in edited_receipt["entries"].as_array_mut().unwrap() {
+        for field in [
+            "verification",
+            "target_id",
+            "prior_write",
+            "duplicate_write",
+        ] {
+            entry.as_object_mut().unwrap().remove(field);
+        }
+        entry["disposition"] = json!({
+            "status": "omitted",
+            "reason": {"code": "already_migrated"}
+        });
+    }
+    write_json_new(&unverified, &edited_receipt).unwrap();
+    let error = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&unverified),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("no verified entry"), "{error}");
+
+    // The basis file is bound into the digest: changing it after approval refuses the apply.
+    let approved_basis = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&beta_basis),
+        )
+        .unwrap();
+    fs::write(
+        &beta_basis,
+        format!("{} ", fs::read_to_string(&beta_basis).unwrap()),
+    )
+    .unwrap();
+    let error = engine
+        .apply(
+            &approved_basis,
+            &ApprovalReceipt {
+                schema_version: "0.1.0".into(),
+                receipt_id: "synthetic-approval".into(),
+                plan_digest: approved_basis.plan_digest.clone(),
+                approved_at: timestamp().unwrap(),
+                backend: "local".into(),
+                approver: "synthetic-user".into(),
+            },
+            "plan.json".into(),
+            "approval.json".into(),
+        )
+        .unwrap_err();
+    let chained = format!("{error:#}");
+    assert!(chained.contains("Plan digest mismatch"), "{chained}");
+
+    // A user edit of a shared artifact refuses under the same basis instead of being overwritten.
+    let index = home.path().join("index.md");
+    let owned = fs::read_to_string(&index).unwrap();
+    fs::write(&index, format!("{owned}\nuser edit\n")).unwrap();
+    let edited = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&beta_basis),
+        )
+        .unwrap();
+    assert!(edited.entries.iter().all(|entry| entry.disposition
+        == Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified,
+        }));
+    // The plan must say why: a shared-artifact divergence is otherwise indistinguishable from an edited
+    // memory record, and the user needs the basis to know what to restore.
+    assert!(
+        edited.warnings.iter().any(|warning| {
+            warning.contains("shared artifacts")
+                && warning.contains("index.md")
+                && warning.contains(beta_basis.to_str().unwrap())
+        }),
+        "{:?}",
+        edited.warnings
+    );
+
+    // Rolling the index back to the alpha-era snapshot matches the older alpha receipt, not the latest
+    // verified basis: refused. The basis-less fallback alone cannot distinguish that rollback, which is
+    // exactly why home mode always supplies the latest verified basis when one exists.
+    fs::write(&index, &index_after_alpha).unwrap();
+    fs::write(home.path().join("log.md"), &log_after_alpha).unwrap();
+    let rolled_back = engine
+        .plan_with_satellite(
+            &source,
+            policy(),
+            &alpha,
+            Some(&alpha_previous),
+            Some(&beta_basis),
+        )
+        .unwrap();
+    assert!(rolled_back.entries.iter().all(|entry| entry.disposition
+        == Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified,
+        }));
+    let blind_fallback = engine
+        .plan_with_satellite(&source, policy(), &alpha, Some(&alpha_previous), None)
+        .unwrap();
+    assert!(blind_fallback.entries.iter().all(|entry| entry.disposition
+        == Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated,
+        }));
 }

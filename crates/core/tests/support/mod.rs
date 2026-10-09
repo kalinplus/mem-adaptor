@@ -213,9 +213,11 @@ pub fn plan() -> PlanReport {
             writers: vec![writer],
             gate_policy: policy(),
             previous_receipt_hash: None,
+            shared_basis_hash: None,
         },
         plan_digest: HASH.into(),
         previous_receipt_ref: None,
+        shared_basis_ref: None,
     }
 }
 

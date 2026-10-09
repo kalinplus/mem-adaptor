@@ -227,23 +227,30 @@ impl Engine {
         gate_policy: GatePolicy,
         previous: Option<&Path>,
     ) -> Result<PlanReport> {
-        Ok(self.prepare(source, gate_policy, None, previous)?.report)
+        Ok(self
+            .prepare(source, gate_policy, None, previous, None)?
+            .report)
     }
 
     /// Plans a home-mode run under an explicitly supplied satellite identity (DEC-20).
     /// The engine only consumes the identity: registry lookup, issuance, and move re-binding
     /// live in `crate::satellite` and the CLI's home layer, which hand the resolved identity to
     /// this method. Receipt attribution binds to the satellite ID rather than the source path,
-    /// so moving the satellite directory keeps the chain.
+    /// so moving the satellite directory keeps the chain. `shared_basis` optionally supplies the
+    /// most recent completed and verified receipt for the same target across all satellites
+    /// (DEC-19 shared artifacts): shared products are then reconciled against that basis instead
+    /// of this satellite's own chain, so another satellite's legitimate write is not mistaken
+    /// for user tampering.
     pub fn plan_with_satellite(
         &self,
         source: &Path,
         gate_policy: GatePolicy,
         satellite: &SatelliteSpec,
         previous: Option<&Path>,
+        shared_basis: Option<&Path>,
     ) -> Result<PlanReport> {
         Ok(self
-            .prepare(source, gate_policy, Some(satellite), previous)?
+            .prepare(source, gate_policy, Some(satellite), previous, shared_basis)?
             .report)
     }
 
@@ -256,6 +263,7 @@ impl Engine {
         gate_policy: GatePolicy,
         satellite: Option<&SatelliteSpec>,
         previous_ref: Option<&Path>,
+        shared_basis_ref: Option<&Path>,
     ) -> Result<PipelinePlan> {
         let started = Instant::now();
         crate::schema::validate(
@@ -366,9 +374,28 @@ impl Engine {
                 Ok(receipt)
             })
             .transpose()?;
+        // The shared-artifact basis (DEC-19) is the most recent completed and verified receipt for the
+        // same target across all satellites; its exact bytes are an execution dependency via the digest.
+        // Structural qualification per target (writer, location, verified entry, shared artifacts) happens
+        // inside the target loop where the run's writers are known.
+        let mut shared_basis_hash = None;
+        let shared_basis = shared_basis_ref
+            .map(|path| -> Result<ReceiptReport> {
+                let bytes = fs::read(path)?;
+                let receipt: ReceiptReport = serde_json::from_slice(&bytes)
+                    .map_err(|_| anyhow::anyhow!("Invalid shared-basis receipt JSON or fields"))?;
+                crate::schema::validate("receipt-report", &receipt)?;
+                shared_basis_hash = Some(content_hash(&bytes));
+                Ok(receipt)
+            })
+            .transpose()?;
         let mut inventory: BTreeMap<_, _> = source
             .files
             .iter()
+            // The home's control directory (DEC-19) is migration machinery, never memory content:
+            // it is excluded from the inventory and manifest, so rotating receipts and plans inside a
+            // home never churn a plan that reads the home itself as a source.
+            .filter(|(path, _)| !path.starts_with(".mem-adaptor/"))
             .map(|(path, bytes)| {
                 (
                     path.clone(),
@@ -391,7 +418,13 @@ impl Engine {
         let mut anomalies = Vec::new();
         let mut source_unavailable = Vec::new();
         for reader in &self.registry.readers {
-            let claims = reader.claim(&source.files);
+            // The control directory is migration machinery, never memory content (DEC-19), so a claim
+            // that reaches into it is disregarded instead of surfacing as an unknown-file fault.
+            let claims: Vec<_> = reader
+                .claim(&source.files)
+                .into_iter()
+                .filter(|claim| !claim.path.starts_with(".mem-adaptor/"))
+                .collect();
             if !claims.is_empty() {
                 adapters.push(AdapterVersion {
                     id: reader.id().into(),
@@ -692,20 +725,76 @@ impl Engine {
                         .collect::<Result<Vec<_>>>()?,
                 )?,
             });
-            let shared_modified = previous
+            // Shared products (DEC-19) are reconciled against the latest verified basis when one is
+            // supplied: the disk state must equal that basis, so another satellite's legitimate write
+            // passes while a user edit or a rollback to any older snapshot refuses. Only the latest
+            // basis is accepted; matching an older receipt never green-lights a rollback. Without a
+            // basis the run falls back to the single-chain check against its own previous receipt.
+            let plan_artifacts = &targets.last().unwrap().artifacts;
+            let basis_target = shared_basis
                 .as_ref()
-                .and_then(|receipt| receipt.targets.iter().find(|item| item.id == *target))
-                .is_some_and(|old| {
-                    writer.shared_artifact_paths().iter().any(|path| {
-                        old.artifacts.iter().find(|artifact| artifact.path == *path)
-                            != targets
-                                .last()
-                                .unwrap()
-                                .artifacts
-                                .iter()
-                                .find(|artifact| artifact.path == *path)
+                .and_then(|receipt| receipt.targets.iter().find(|item| item.id == *target));
+            if let Some(basis) = basis_target {
+                ensure!(
+                    basis.writer == writer.id(),
+                    "Shared-basis receipt target {target} was written by Writer {}, but this run writes with {}",
+                    basis.writer,
+                    writer.id()
+                );
+                ensure!(
+                    basis.location == writer.location().to_string_lossy(),
+                    "Shared-basis receipt target {target} points at another location; the basis is unreliable"
+                );
+                ensure!(
+                    shared_basis
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|entry| entry.target == *target
+                            && entry.verification == Some(Verification::Verified)),
+                    "Shared-basis receipt has no verified entry for target {target}"
+                );
+                ensure!(
+                    writer.shared_artifact_paths().iter().all(|path| basis
+                        .artifacts
+                        .iter()
+                        .any(|artifact| artifact.path == *path)),
+                    "Shared-basis receipt lacks recorded shared artifacts for target {target}"
+                );
+            }
+            let shared_modified = if let Some(basis) = basis_target {
+                writer.shared_artifact_paths().iter().any(|path| {
+                    basis
+                        .artifacts
+                        .iter()
+                        .find(|artifact| artifact.path == *path)
+                        != plan_artifacts
+                            .iter()
+                            .find(|artifact| artifact.path == *path)
+                })
+            } else {
+                previous
+                    .as_ref()
+                    .and_then(|receipt| receipt.targets.iter().find(|item| item.id == *target))
+                    .is_some_and(|old| {
+                        writer.shared_artifact_paths().iter().any(|path| {
+                            old.artifacts.iter().find(|artifact| artifact.path == *path)
+                                != plan_artifacts
+                                    .iter()
+                                    .find(|artifact| artifact.path == *path)
+                        })
                     })
-                });
+            };
+            if shared_modified {
+                warnings.push(format!(
+                    "Target {target}: shared artifacts ({}) differ from {}; entries that would write are left unresolved until the recorded shared state is restored.",
+                    writer.shared_artifact_paths().join(", "),
+                    shared_basis_ref
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "the previous receipt".into())
+                ));
+            }
             writers.insert(
                 writer.id(),
                 WriterSpec {
@@ -982,6 +1071,7 @@ impl Engine {
             writers: writers.clone(),
             gate_policy: gate_policy.clone(),
             previous_receipt_hash,
+            shared_basis_hash,
         };
         let created_at = timestamp()?;
         let systems: BTreeSet<_> = records
@@ -1047,6 +1137,7 @@ impl Engine {
             plan_digest: plan_digest(&digest_inputs)?,
             digest_inputs,
             previous_receipt_ref: previous_ref.map(|path| path.to_string_lossy().into_owned()),
+            shared_basis_ref: shared_basis_ref.map(|path| path.to_string_lossy().into_owned()),
         };
         let mut public = serde_json::to_value(&report)?;
         crate::gate::mask_value(&mut public);
@@ -1129,6 +1220,7 @@ impl Engine {
             approved.gate_policy.clone(),
             approved.source.satellite.as_ref(),
             approved.previous_receipt_ref.as_deref().map(Path::new),
+            approved.shared_basis_ref.as_deref().map(Path::new),
         )?;
         ensure!(
             current.report.plan_digest == approved.plan_digest,
