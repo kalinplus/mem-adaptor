@@ -130,16 +130,74 @@ pub fn native_projection(record: &CanonicalRecord) -> Value {
     native
 }
 
-/// Rejects conflicting native provenance; display titles remain editable and are mapped only when derived.
-pub fn validate_projection(metadata: &Value, record: &CanonicalRecord) -> crate::Result<()> {
+/// Reports which advisory native fields diverge from the envelope-stored record (DEC-21 A).
+/// Provenance (`sources`/`generated`) is derived from envelope-stored fields, so its divergence is
+/// unambiguous. The `title` judgement is deliberately the display-value rule DEC-21 A describes: it
+/// compares against the value derived from the current body, so a body edit makes a stale title line
+/// diverge — both readings get the same advisory treatment, so the ambiguity never changes a decision.
+/// Divergence is not an error; body/tags adoptions are handled by `apply_home_edits`.
+pub struct NativeDivergence {
+    pub title: bool,
+    pub sources: bool,
+    pub generated: bool,
+}
+
+/// Classifies advisory native-field divergence of a managed file against its envelope-stored record.
+pub fn classify_native(metadata: &Value, record: &CanonicalRecord) -> NativeDivergence {
     let expected = native_projection(record);
-    for field in ["sources", "generated", "tags"] {
-        ensure!(
-            metadata.get(field) == expected.get(field),
-            "OKF native projection differs from canonical metadata"
-        );
+    NativeDivergence {
+        title: metadata.get("title") != expected.get("title"),
+        sources: metadata.get("sources") != expected.get("sources"),
+        generated: metadata.get("generated") != expected.get("generated"),
     }
-    Ok(())
+}
+
+/// Outcome of applying home-side edits to a restored record, so callers can report what was adopted.
+pub struct HomeEdits {
+    pub body_changed: bool,
+    pub tags_adopted: bool,
+}
+
+/// Applies home-side edits to a restored managed record (DEC-21 A): the current body is the fact, so its
+/// hash is re-homed, and frontmatter tags diverging from the envelope are a new fact adopted into the
+/// canonical record. Provenance stays envelope-authoritative and is never adopted here. A tags value
+/// that is neither absent nor an all-string array cannot be adopted and keeps the envelope value.
+pub fn apply_home_edits(record: &mut CanonicalRecord, metadata: &Value, body: &str) -> HomeEdits {
+    let body_changed = record.content_hash != crate::engine::content_hash(body.as_bytes());
+    if body_changed {
+        record.content_hash = crate::engine::content_hash(body.as_bytes());
+    }
+    // A missing or null tags key states "no tags". A bare string adopts as a one-element list, the
+    // same interpretation the ordinary-note path uses; any other non-string-array shape is not
+    // adoptable and keeps the envelope value instead of guessing a coercion.
+    let home_tags = match metadata.get("tags") {
+        None => Some(None),
+        Some(tags) if tags.is_null() => Some(None),
+        Some(tags) if tags.is_string() => Some(Some(vec![tags.as_str().unwrap().to_owned()])),
+        Some(tags)
+            if tags
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string)) =>
+        {
+            Some(Some(
+                tags.as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+            ))
+        }
+        Some(_) => None,
+    };
+    let tags_adopted = home_tags.as_ref().is_some_and(|home| home != &record.tags);
+    if tags_adopted && let Some(home) = home_tags {
+        record.tags = home;
+    }
+    HomeEdits {
+        body_changed,
+        tags_adopted,
+    }
 }
 
 /// Recognizes the native version-only root index independently of Writer ownership.

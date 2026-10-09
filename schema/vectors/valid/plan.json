@@ -36,6 +36,16 @@
         "unmapped": [{"source_path": "/custom", "reason": "source_unknown"}],
         "sensitive_findings": [], "evidence_level": "measured",
         "content_preview": "Synthetic memory."
+      },
+      {
+        "canonical_id": "cccccccccccccccccccccccccccccccc",
+        "source_record_id": "notes/gone.md", "source_locator": "notes/gone.md",
+        "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "target": "home", "disposition": {"status": "unresolved", "reason": {"code": "target_unmanaged"}},
+        "field_map": [{"source_path": "/body", "canonical_path": "/content"}],
+        "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
+        "unmapped": [],
+        "sensitive_findings": [], "evidence_level": "measured"
       }
     ],
     "source_unavailable": [],

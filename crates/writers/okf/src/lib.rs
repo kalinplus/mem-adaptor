@@ -19,12 +19,85 @@ pub struct OkfWriter {
     location: PathBuf,
 }
 
+/// Classified state of one OKF managed-target file (DEC-21 A/D): the planning path distinguishes a
+/// de-managed or damaged-managed file from a healthy managed record so only that file is reported.
+enum Observation {
+    Missing,
+    Unmanaged,
+    ManagedInvalid,
+    Managed { record: Box<CanonicalRecord> },
+}
+
 impl OkfWriter {
     /// Normalizes accepted ancestor aliases once and rejects an explicitly symlinked target root.
     pub fn new(location: PathBuf) -> Result<Self> {
         Ok(Self {
             location: target::normalize_root(&location)?,
         })
+    }
+
+    /// One classified look at a managed-target candidate (DEC-21 A/D). Parse-level failures (damaged
+    /// claimed envelopes, invalid UTF-8, invalid target ids) still error and abort planning; a parseable
+    /// but schema/consistency-invalid envelope or a de-managed file classifies so the engine can report
+    /// that single file instead of failing the plan. Managed records adopt home-side edits, so the
+    /// returned record reflects the home's current facts (body hash, tags).
+    fn observe(&self, target_id: &str) -> Result<Observation> {
+        let id = target_id
+            .strip_prefix("memories/")
+            .context("Invalid OKF target id")?;
+        ensure!(okf::valid_id(id), "Invalid OKF target id");
+        let Some(bytes) = target::read_file(&self.location, &format!("{target_id}.md"))? else {
+            return Ok(Observation::Missing);
+        };
+        let text = std::str::from_utf8(&bytes).context("Invalid target Markdown encoding")?;
+        let Some(metadata) = okf::managed_metadata(text)? else {
+            return Ok(Observation::Unmanaged);
+        };
+        let (_, body) = mem_adaptor_core::reader::markdown_document(text)?;
+        // A parseable but schema/consistency-invalid envelope (including a path-identity mismatch)
+        // classifies per file instead of failing the plan; strict single-file `inspect` turns the
+        // same classification into an error for write-time rechecks.
+        let Ok(mut record) = okf::restore(&metadata, body) else {
+            return Ok(Observation::ManagedInvalid);
+        };
+        if record.canonical_id != id {
+            return Ok(Observation::ManagedInvalid);
+        }
+        okf::apply_home_edits(&mut record, &metadata, body);
+        Ok(Observation::Managed {
+            record: Box::new(record),
+        })
+    }
+
+    /// Enumerates managed-candidate paths by envelope claim, not by parse success, so target state
+    /// observation includes damaged envelopes (DEC-21 A/D) without aborting, while unmanaged user notes
+    /// with id-shaped names stay excluded (never adopted). YAML-level damage on a claimed envelope still
+    /// propagates because `managed_metadata` refuses it.
+    fn managed_paths(&self) -> Result<std::collections::BTreeSet<String>> {
+        let mut paths = std::collections::BTreeSet::new();
+        if !target::directory_exists(&self.location.join("memories"))? {
+            return Ok(paths);
+        }
+        for entry in fs::read_dir(self.location.join("memories"))? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(id) = name.strip_suffix(".md") else {
+                continue;
+            };
+            if !okf::valid_id(id) {
+                continue;
+            }
+            let bytes: Option<Vec<u8>> =
+                target::read_file(&self.location, &format!("memories/{id}.md"))?;
+            let bytes = bytes.context("Managed candidate vanished during enumeration")?;
+            let text = std::str::from_utf8(&bytes).context("Invalid target Markdown encoding")?;
+            if okf::managed_metadata(text)?.is_some() {
+                paths.insert(format!("memories/{id}.md"));
+            }
+        }
+        Ok(paths)
     }
 
     /// Preflights every valid-id candidate using the same managed-envelope classifier as direct inspection.
@@ -246,6 +319,7 @@ impl Writer for OkfWriter {
             let path = format!("{}.md", planned.target_id);
             let previous_bytes = target::read_file(&self.location, &path)?;
             token.authorize_artifact(self, &path, previous_bytes.as_deref())?;
+            let mut sticky_base: Option<Value> = None;
             let mut frontmatter = if let Some(prior) = &planned.previous_write {
                 ensure!(
                     prior.target_id == planned.target_id,
@@ -263,7 +337,14 @@ impl Writer for OkfWriter {
                     "Target payload changed after approval"
                 );
                 let text = std::str::from_utf8(previous_bytes.as_ref().unwrap())?;
-                okf::managed_metadata(text)?.context("Missing managed OKF metadata")?
+                let old_metadata =
+                    okf::managed_metadata(text)?.context("Missing managed OKF metadata")?;
+                // Sticky base (DEC-21 A): the old envelope's derivation decides whether an advisory
+                // value was user-edited, so restore the old record before overwriting the frontmatter.
+                let (_, old_body) = mem_adaptor_core::reader::markdown_document(text)?;
+                let old_record = okf::restore(&old_metadata, old_body)?;
+                sticky_base = Some(okf::native_projection(&old_record));
+                old_metadata
             } else {
                 ensure!(
                     previous_bytes.is_none(),
@@ -274,12 +355,26 @@ impl Writer for OkfWriter {
             let native = okf::native_projection(&planned.record);
             frontmatter["type"] = native["type"].clone();
             frontmatter["mem_adaptor_envelope"] = Value::String("okf:0.2".into());
-            for field in ["title", "sources", "tags", "generated"] {
+            // Advisory fields are sticky (DEC-21 A): a value the user changed relative to the old
+            // envelope's derivation survives the update instead of being overwritten by the new
+            // projection. Tags follow the canonical record, whose home value is already the fact.
+            for field in ["title", "sources", "generated"] {
+                let keep_user_value = sticky_base.as_ref().is_some_and(|old| {
+                    frontmatter.get(field).is_some() && frontmatter.get(field) != old.get(field)
+                });
+                if keep_user_value {
+                    continue;
+                }
                 if let Some(value) = native.get(field) {
                     frontmatter[field] = value.clone();
                 } else {
                     frontmatter.as_object_mut().unwrap().remove(field);
                 }
+            }
+            if let Some(tags) = native.get("tags") {
+                frontmatter["tags"] = tags.clone();
+            } else {
+                frontmatter.as_object_mut().unwrap().remove("tags");
             }
             frontmatter["mem_adaptor"] = metadata;
             let yaml = serde_saphyr::to_string(&frontmatter)?;
@@ -392,27 +487,66 @@ impl Writer for OkfWriter {
     }
 
     /// Reads a safe regular-file candidate, distinguishing unowned Markdown from corrupt managed envelopes.
-    /// Managed records must retain source/filename identity and the same native provenance consistency as the Reader.
+    /// Managed records adopt home-side edits (DEC-21 A) so the returned record reflects the home's current
+    /// facts; a parseable but invalid envelope stays an error here because write-time rechecks and single
+    /// inspections must keep refusing instead of classifying (the planning path uses `inspect_many`).
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>> {
-        let id = target_id
-            .strip_prefix("memories/")
-            .context("Invalid OKF target id")?;
-        ensure!(okf::valid_id(id), "Invalid OKF target id");
-        let Some(bytes) = target::read_file(&self.location, &format!("{target_id}.md"))? else {
-            return Ok(None);
-        };
-        let text = std::str::from_utf8(&bytes).context("Invalid target Markdown encoding")?;
-        let Some(metadata) = okf::managed_metadata(text)? else {
-            return Ok(None);
-        };
-        let (_, body) = mem_adaptor_core::reader::markdown_document(text)?;
-        let record = okf::restore(&metadata, body)?;
-        okf::validate_projection(&metadata, &record)?;
-        ensure!(
-            record.canonical_id == id,
-            "Managed OKF path identity mismatch"
-        );
-        Ok(Some(record))
+        match self.observe(target_id)? {
+            Observation::Missing | Observation::Unmanaged => Ok(None),
+            Observation::Managed { record } => Ok(Some(*record)),
+            Observation::ManagedInvalid => anyhow::bail!(
+                "Managed OKF envelope is invalid: {}",
+                mem_adaptor_core::gate::mask(&format!("{target_id}.md"))
+            ),
+        }
+    }
+
+    /// Classifies each managed-target file once and lets planning continue past user damage (DEC-21 A/D):
+    /// YAML-level parse failures still abort the whole plan through `observe`'s error, while a parseable
+    /// but invalid envelope or a de-managed file becomes a classified entry the engine reports per file.
+    fn inspect_many(
+        &self,
+        target_ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, TargetState>> {
+        target_ids
+            .iter()
+            .map(|id| {
+                Ok((
+                    id.clone(),
+                    match self.observe(id)? {
+                        Observation::Missing => TargetState {
+                            record: None,
+                            target_hash: None,
+                            classification: None,
+                        },
+                        Observation::Unmanaged => TargetState {
+                            record: None,
+                            target_hash: Some(mem_adaptor_core::engine::content_hash(
+                                &target::read_file(&self.location, &format!("{id}.md"))?
+                                    .context("Target vanished during inspection")?,
+                            )),
+                            classification: Some(TargetClassification::Unmanaged),
+                        },
+                        Observation::ManagedInvalid => TargetState {
+                            record: None,
+                            target_hash: Some(mem_adaptor_core::engine::content_hash(
+                                &target::read_file(&self.location, &format!("{id}.md"))?
+                                    .context("Target vanished during inspection")?,
+                            )),
+                            classification: Some(TargetClassification::ManagedInvalid),
+                        },
+                        Observation::Managed { record } => TargetState {
+                            target_hash: Some(mem_adaptor_core::engine::content_hash(
+                                &target::read_file(&self.location, &format!("{id}.md"))?
+                                    .context("Target vanished during inspection")?,
+                            )),
+                            record: Some(*record),
+                            classification: None,
+                        },
+                    },
+                ))
+            })
+            .collect()
     }
 
     fn target_hash(&self, target_id: &str) -> Result<Option<String>> {
@@ -426,11 +560,10 @@ impl Writer for OkfWriter {
     fn artifacts(&self, target_ids: &[String]) -> Result<Vec<TargetArtifact>> {
         let mut paths: std::collections::BTreeSet<_> =
             target_ids.iter().map(|id| format!("{id}.md")).collect();
-        paths.extend(
-            self.managed_records()?
-                .into_keys()
-                .map(|id| format!("{id}.md")),
-        );
+        // Claim-level enumeration keeps damaged (still-declared) managed files observable as target
+        // state instead of failing the plan (DEC-21 A/D), while unmanaged user notes are never
+        // adopted; write-time handling stays strict in `managed_records`.
+        paths.extend(self.managed_paths()?);
         paths.extend(["index.md".into(), "log.md".into()]);
         paths
             .into_iter()

@@ -848,15 +848,36 @@ impl Engine {
                             .context("Missing target inspection")?;
                         match state.record.clone() {
                             None => {
-                                planned.disposition = if state.target_hash.is_some() {
-                                    Disposition::Unresolved {
-                                        reason: UnresolvedReason::TargetModified,
+                                // Classified damage (DEC-21 A/D) stays per-file: a de-managed note is
+                                // reported for a human decision, an invalid envelope keeps its record-level
+                                // refusal plus an anomaly, and only an unclassified present file falls
+                                // back to the legacy modified/deleted split.
+                                planned.disposition = match state.classification {
+                                    Some(TargetClassification::Unmanaged) => {
+                                        Disposition::Unresolved {
+                                            reason: UnresolvedReason::TargetUnmanaged,
+                                        }
                                     }
-                                } else {
-                                    Disposition::Omitted {
+                                    Some(TargetClassification::ManagedInvalid) => {
+                                        anomalies.push(Anomaly {
+                                            source_locator: format!("{}.md", prior.target_id),
+                                            code: "managed_envelope_invalid".into(),
+                                            line: None,
+                                            field_path: None,
+                                        });
+                                        Disposition::Unresolved {
+                                            reason: UnresolvedReason::TargetModified,
+                                        }
+                                    }
+                                    None if state.target_hash.is_some() => {
+                                        Disposition::Unresolved {
+                                            reason: UnresolvedReason::TargetModified,
+                                        }
+                                    }
+                                    None => Disposition::Omitted {
                                         reason: OmissionReason::DeletedInTarget,
-                                    }
-                                }
+                                    },
+                                };
                             }
                             Some(actual)
                                 if record_hash(&actual)? != prior.record_hash
@@ -948,17 +969,27 @@ impl Engine {
                     && let Some(reference) = &planned.duplicate_write
                 {
                     let in_batch = projected.contains_key(&reference.canonical_id);
-                    let representative =
-                        if let Some(record) = projected.get(&reference.canonical_id) {
-                            record.clone()
-                        } else {
-                            target_states
-                                .get(&reference.prior_write.target_id)
-                                .context("Missing duplicate inspection")?
-                                .record
-                                .clone()
-                                .context("Duplicate target disappeared")?
-                        };
+                    let representative = if let Some(record) =
+                        projected.get(&reference.canonical_id)
+                    {
+                        record.clone()
+                    } else {
+                        let state = target_states
+                            .get(&reference.prior_write.target_id)
+                            .context("Missing duplicate inspection")?;
+                        match (&state.record, state.classification) {
+                            (Some(record), _) => record.clone(),
+                            (None, Some(TargetClassification::Unmanaged)) => anyhow::bail!(
+                                "Duplicate target left management: {}",
+                                reference.prior_write.target_id
+                            ),
+                            (None, Some(TargetClassification::ManagedInvalid)) => anyhow::bail!(
+                                "Duplicate target has an invalid managed envelope: {}",
+                                reference.prior_write.target_id
+                            ),
+                            (None, None) => anyhow::bail!("Duplicate target disappeared"),
+                        }
+                    };
                     if duplicate_key(&representative)? == duplicate_key(&planned.record)? {
                         if !in_batch {
                             planned.disposition = Disposition::Omitted {

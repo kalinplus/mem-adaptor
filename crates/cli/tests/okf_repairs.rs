@@ -10,8 +10,11 @@ use std::process::{Command, Output};
 
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::{ActorKind, CanonicalRecord, EvidenceLevel};
-use mem_adaptor_core::engine::{Engine, WriteToken, content_hash, timestamp, write_json_new};
+use mem_adaptor_core::engine::{
+    Engine, WriteToken, content_hash, record_hash, timestamp, write_json_new,
+};
 use mem_adaptor_core::governance::*;
+use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as source;
 use mem_adaptor_core::reports::*;
@@ -206,6 +209,185 @@ fn verified(receipt: &ReceiptReport) {
     );
     assert_eq!(receipt.plan_ref, "synthetic-plan.json");
     assert_eq!(receipt.approval_receipt_ref, "synthetic-approval.json");
+}
+
+/// Group 5 (DEC-21 A): removing a whole envelope de-manages exactly that file. Its entry asks for a
+/// human decision (`target_unmanaged`), the remaining entries and the plan continue, the degraded note
+/// reads back as an ordinary note with a new path identity, and the file's bytes survive untouched.
+#[test]
+fn de_managed_target_files_report_target_unmanaged_and_the_plan_continues() {
+    let directory = fixture();
+    let keep = record("keep", "Managed body that stays managed.\n");
+    let gone = record("gone", "Body whose envelope disappears.\n");
+    let initial = okf_engine(&directory, vec![keep.clone(), gone.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let gone_id = gone.canonical_id.clone();
+    let gone_path = directory
+        .path()
+        .join(format!("target/memories/{gone_id}.md"));
+    let plain = "Plain user note replacing the managed file.\n";
+    fs::write(&gone_path, plain).unwrap();
+    let fresh = record("fresh", "A brand-new third memory.\n");
+    let engine = okf_engine(&directory, vec![keep, gone, fresh]);
+    let next = plan(&engine, &directory, Some(&previous));
+    fn by_source<'a>(report: &'a PlanReport, id: &str) -> &'a PlanEntry {
+        report
+            .entries
+            .iter()
+            .find(|entry| entry.source_record_id == id)
+            .unwrap()
+    }
+    assert_eq!(
+        by_source(&next, "gone").disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetUnmanaged,
+        }
+    );
+    assert_eq!(
+        by_source(&next, "keep").disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated,
+        }
+    );
+    assert_eq!(by_source(&next, "fresh").disposition, Disposition::Accepted);
+    apply(&engine, &next).unwrap();
+    assert_eq!(fs::read_to_string(&gone_path).unwrap(), plain);
+    // The degraded file is an ordinary note again: reading the home as a source gives it a fresh
+    // path-derived identity instead of the managed canonical id.
+    let inventory: FileInventory = fs::read_dir(directory.path().join("target/memories"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                format!("memories/{}", entry.file_name().to_str().unwrap()),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    let source = SourceFs {
+        root: "/synthetic".into(),
+        files: inventory,
+        satellite_id: None,
+    };
+    let degraded_claim = MarkdownReader
+        .claim(&source.files)
+        .into_iter()
+        .find(|claim| claim.path == format!("memories/{gone_id}.md"))
+        .unwrap();
+    let degraded = MarkdownReader.read(&degraded_claim, &source).unwrap();
+    assert_eq!(degraded.records.len(), 1);
+    assert_ne!(degraded.records[0].canonical_id, gone_id);
+    assert!(
+        degraded.records[0]
+            .source_record_id
+            .starts_with("memories/")
+    );
+}
+
+/// Group 5 (DEC-21 A/D): a parseable but invalid envelope is reported per file (anomaly plus an
+/// unresolved entry) while the plan keeps running; the write then refuses before any target change
+/// because the index rebuild cannot represent the damaged managed record (testing-policy D).
+#[test]
+fn invalid_envelopes_report_per_file_and_the_plan_continues() {
+    let directory = fixture();
+    let keep = record("keep", "Managed body that stays managed.\n");
+    let broken = record("broken", "Body whose envelope stops validating.\n");
+    let initial = okf_engine(&directory, vec![keep.clone(), broken.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let broken_id = broken.canonical_id.clone();
+    let text = note(&directory, &broken_id);
+    let (mut metadata, body) = native(&text);
+    metadata["mem_adaptor"]["source_record_id"] = json!("tampered-identity");
+    fs::write(
+        directory
+            .path()
+            .join(format!("target/memories/{broken_id}.md")),
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let before = snapshot(&directory.path().join("target"));
+    let fresh = record("fresh", "A brand-new third memory.\n");
+    let engine = okf_engine(&directory, vec![keep, broken, fresh]);
+    let next = plan(&engine, &directory, Some(&previous));
+    fn by_source<'a>(report: &'a PlanReport, id: &str) -> &'a PlanEntry {
+        report
+            .entries
+            .iter()
+            .find(|entry| entry.source_record_id == id)
+            .unwrap()
+    }
+    assert_eq!(
+        by_source(&next, "broken").disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified,
+        }
+    );
+    assert_eq!(
+        next.anomalies
+            .iter()
+            .filter(|anomaly| anomaly.code == "managed_envelope_invalid"
+                && anomaly.source_locator == format!("memories/{broken_id}.md"))
+            .count(),
+        1,
+        "{:?}",
+        next.anomalies
+    );
+    assert_eq!(by_source(&next, "fresh").disposition, Disposition::Accepted);
+    let error = apply(&engine, &next).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Managed OKF envelope is invalid"),
+        "{error:#}"
+    );
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+}
+
+/// Group 3 (DEC-21 A): advisory values the user changed relative to the old envelope survive an
+/// approved update; the planned baseline is crafted to match the edited file, which is how a
+/// resolved home-value verdict will anchor the next round (#34b).
+#[test]
+fn sticky_advisory_values_survive_approved_updates() {
+    let directory = fixture();
+    let sticky = record("sticky", "First body.\n");
+    let initial = okf_engine(&directory, vec![sticky.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", sticky.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let edited = text.replacen("title: First body", "title: Kept user title", 1);
+    assert_ne!(edited, text);
+    fs::write(&path, &edited).unwrap();
+    let (metadata, body) = native(&edited);
+    let edited_record = okf::restore(&metadata, body).unwrap();
+    let mut anchored = serde_json::to_value(&receipt).unwrap();
+    anchored["entries"][0]["prior_write"] = json!({
+        "target_id": format!("memories/{}", sticky.canonical_id),
+        "content_hash": edited_record.content_hash,
+        "record_hash": record_hash(&edited_record).unwrap(),
+        "target_hash": content_hash(edited.as_bytes()),
+        "verification": {"status": "verified"}
+    });
+    let previous = directory.path().join("anchored.json");
+    write_json_new(&previous, &anchored).unwrap();
+    let updated = record("sticky", "Second body with a satellite update.\n");
+    let engine = okf_engine(&directory, vec![updated]);
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(next.entries[0].disposition, Disposition::Accepted);
+    apply(&engine, &next).unwrap();
+    let after = fs::read_to_string(&path).unwrap();
+    assert!(after.contains("title: Kept user title"), "{after}");
+    assert!(
+        after.contains("Second body with a satellite update."),
+        "{after}"
+    );
+    let (final_metadata, final_body) = native(&after);
+    let final_record = okf::restore(&final_metadata, final_body).unwrap();
+    assert_eq!(final_record.canonical_id, sticky.canonical_id);
 }
 
 /// Exercises legal embedded delimiters, CRLF native scanning, and historical updates through all real boundaries.
@@ -561,9 +743,9 @@ fn damaged_mapping_declarations_refuse_before_unrelated_writes() {
     );
 }
 
-/// Applies native source/tag/time consistency on Writer preflight as on Reader import, without target changes.
+/// Native source/tag/time edits no longer abort Writer-side planning; the edited record alone refuses.
 #[test]
-fn managed_native_projection_conflicts_refuse_unrelated_writes() {
+fn native_projection_edits_do_not_abort_unrelated_plans() {
     for field in ["sources", "generated", "tags"] {
         let directory = fixture();
         let original = record("old", "Existing managed record.\n");
@@ -586,23 +768,27 @@ fn managed_native_projection_conflicts_refuse_unrelated_writes() {
             ),
         )
         .unwrap();
-        let before = snapshot(directory.path());
+        // DEC-21 A: a parseable native-field edit is classified, not fatal, so an unrelated plan keeps
+        // running; the edited record itself is refused by its own round (record-level modified), and
+        // the edited file survives untouched because this round never plans it.
         let engine = okf_engine(&directory, vec![record("new", "Unrelated new memory.\n")]);
-        let error = engine
+        let next = engine
             .plan(&directory.path().join("source"), policy())
-            .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("OKF native projection differs from canonical metadata")
-        );
-        assert_eq!(snapshot(directory.path()), before);
-        assert!(!directory.path().join("plan.approval.json").exists());
-        assert!(!directory.path().join("plan.receipt.json").exists());
+            .unwrap();
+        assert_eq!(next.entries.len(), 1);
+        assert_eq!(next.entries[0].disposition, Disposition::Accepted);
+        let edited_path = directory
+            .path()
+            .join(format!("target/memories/{}.md", original.canonical_id));
+        let edited_before = fs::read(&edited_path).unwrap();
+        apply(&engine, &next).unwrap();
+        assert_eq!(fs::read(&edited_path).unwrap(), edited_before);
     }
 }
 
-/// Refuses an internally inconsistent managed identity before planning any unrelated writes.
+/// An internally inconsistent managed identity lets unrelated planning continue but refuses writes.
 #[test]
-fn corrupt_managed_source_identity_rejects_unrelated_plan_without_changes() {
+fn corrupt_managed_source_identity_plans_on_but_refuses_writes_without_changes() {
     let directory = fixture();
     let original = record("old", "Existing managed body.\n");
     let initial = okf_engine(&directory, vec![original.clone()]);
@@ -625,19 +811,26 @@ fn corrupt_managed_source_identity_rejects_unrelated_plan_without_changes() {
         &directory,
         vec![record("unrelated", "Other distinct body.\n")],
     );
-    let error = engine
+    // DEC-21 A/D: planning classifies the damaged envelope per file instead of aborting, so the
+    // unrelated record plans on; the damaged managed record then refuses the write before any target
+    // byte changes, because the index rebuild cannot represent it (testing-policy D).
+    let next = engine
         .plan(&directory.path().join("source"), policy())
-        .unwrap_err();
-    assert!(format!("{error:#}").to_lowercase().contains("identity"));
+        .unwrap();
+    assert_eq!(next.entries[0].disposition, Disposition::Accepted);
+    let error = apply(&engine, &next).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Managed OKF envelope is invalid"),
+        "{error:#}"
+    );
     assert_eq!(snapshot(&directory.path().join("target")), before);
-    assert!(!directory.path().join("synthetic-approval.json").exists());
     assert!(!directory.path().join("synthetic-receipt.json").exists());
 }
 
 /// Refuses a managed envelope whose stored satellite ID disagrees with its own canonical identity (DEC-20);
 /// the stored satellite participates in the consistency check, so corrupting it alone is already a mismatch.
 #[test]
-fn corrupt_managed_satellite_id_rejects_unrelated_plan_without_changes() {
+fn corrupt_managed_satellite_id_plans_on_but_refuses_writes_without_changes() {
     let directory = fixture();
     let original = record("old", "Existing managed body.\n");
     let initial = okf_engine(&directory, vec![original.clone()]);
@@ -660,12 +853,19 @@ fn corrupt_managed_satellite_id_rejects_unrelated_plan_without_changes() {
         &directory,
         vec![record("unrelated", "Other distinct body.\n")],
     );
-    let error = engine
+    // DEC-21 A/D: planning classifies the damaged envelope per file instead of aborting, so the
+    // unrelated record plans on; the damaged managed record then refuses the write before any target
+    // byte changes, because the index rebuild cannot represent it (testing-policy D).
+    let next = engine
         .plan(&directory.path().join("source"), policy())
-        .unwrap_err();
-    assert!(format!("{error:#}").to_lowercase().contains("identity"));
+        .unwrap();
+    assert_eq!(next.entries[0].disposition, Disposition::Accepted);
+    let error = apply(&engine, &next).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Managed OKF envelope is invalid"),
+        "{error:#}"
+    );
     assert_eq!(snapshot(&directory.path().join("target")), before);
-    assert!(!directory.path().join("synthetic-approval.json").exists());
     assert!(!directory.path().join("synthetic-receipt.json").exists());
 }
 
@@ -788,9 +988,9 @@ fn not_a_directory_is_neither_empty_inventory_nor_missing_record() {
     assert_eq!(snapshot(&directory.path().join("target")), before);
 }
 
-/// Treats an existing plain replacement as modified, never as a deleted managed record with history.
+/// Treats an existing plain replacement as de-managed: refused for a human decision, not deleted.
 #[test]
-fn history_with_plain_replacement_is_modified_not_deleted() {
+fn history_with_plain_replacement_is_unmanaged_not_deleted() {
     let directory = fixture();
     let original = record("existing", "Original managed body.\n");
     let engine = okf_engine(&directory, vec![original.clone()]);
@@ -807,10 +1007,12 @@ fn history_with_plain_replacement_is_modified_not_deleted() {
     .unwrap();
     let before = snapshot(directory.path());
     let next = plan(&engine, &directory, Some(&history));
+    // DEC-21 A: the envelope is gone, so the file is an ordinary note and the entry asks for a human
+    // decision instead of the record-level modified refusal.
     assert_eq!(
         next.entries[0].disposition,
         Disposition::Unresolved {
-            reason: UnresolvedReason::TargetModified,
+            reason: UnresolvedReason::TargetUnmanaged,
         }
     );
     let skipped = apply(&engine, &next).unwrap();

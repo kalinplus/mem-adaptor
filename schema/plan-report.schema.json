@@ -200,7 +200,7 @@
         },
         {
           "type": "object", "additionalProperties": false, "required": ["code"],
-          "properties": {"code": {"enum": ["memory_disabled", "deletion_needs_decision", "target_modified", "target_untracked"]}}
+          "properties": {"code": {"enum": ["memory_disabled", "deletion_needs_decision", "target_modified", "target_untracked", "target_unmanaged"]}}
         }
       ]
     },

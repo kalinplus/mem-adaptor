@@ -310,7 +310,7 @@ fn a_new_earlier_duplicate_never_replaces_the_existing_written_identity() {
 }
 
 #[test]
-fn okf_skips_unmanaged_base32_named_notes_and_preflights_damaged_managed_notes() {
+fn okf_skips_unmanaged_base32_notes_and_refuses_writes_over_damaged_managed_notes() {
     for (body, managed) in [
         ("Unrelated Markdown.\n", false),
         (
@@ -336,7 +336,35 @@ fn okf_skips_unmanaged_base32_named_notes_and_preflights_damaged_managed_notes()
         let engine = engine(&directory, "okf");
         let report = engine.plan(&directory.path().join("source"), policy(GateAction::Pass));
         if managed {
-            assert!(report.is_err());
+            // DEC-21 A/D: the damaged envelope is classified instead of aborting the plan, so the
+            // unrelated note plans on and the damaged file stays observable in target state; the
+            // write then refuses before touching anything because the index rebuild cannot represent
+            // the damaged managed record (testing-policy D).
+            let report = report.unwrap();
+            assert!(report.targets[0].artifacts.iter().any(|artifact| {
+                artifact
+                    .path
+                    .ends_with("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md")
+            }));
+            let error = engine
+                .apply(
+                    &report,
+                    &ApprovalReceipt {
+                        schema_version: "0.1.0".into(),
+                        receipt_id: "synthetic".into(),
+                        plan_digest: report.plan_digest.clone(),
+                        approved_at: timestamp().unwrap(),
+                        backend: "local".into(),
+                        approver: "synthetic".into(),
+                    },
+                    "plan.json".into(),
+                    "approval.json".into(),
+                )
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("Managed OKF envelope is invalid"),
+                "{error:#}"
+            );
             assert_eq!(
                 fs::read_dir(directory.path().join("target/memories"))
                     .unwrap()

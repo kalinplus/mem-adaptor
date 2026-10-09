@@ -53,6 +53,14 @@
             "verification": {"status": "verified"}
           }
         }
+      },
+      {
+        "canonical_id": "cccccccccccccccccccccccccccccccc",
+        "source_record_id": "notes/gone.md", "source_locator": "notes/gone.md",
+        "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "target": "home", "disposition": {"status": "unresolved", "reason": {"code": "target_unmanaged"}},
+        "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
+        "sensitive_findings": [], "evidence_level": "measured"
       }
     ],
     "verdicts": []

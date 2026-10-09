@@ -54,12 +54,19 @@ pub enum OmissionReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UnresolvedReason {
-    Conflict { cluster_id: String },
-    DnaUnsupported { field: String },
+    Conflict {
+        cluster_id: String,
+    },
+    DnaUnsupported {
+        field: String,
+    },
     MemoryDisabled,
     DeletionNeedsDecision,
     TargetModified,
     TargetUntracked,
+    /// The target file left management (DEC-21 A): its envelope is gone, so the file is an ordinary
+    /// user note and prior history must not silently re-own it.
+    TargetUnmanaged,
 }
 
 /// Describes read-back evidence separately from disposition; verified is limited to compared supported fields.

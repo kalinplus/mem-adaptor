@@ -597,6 +597,182 @@ fn empty_sources_and_registered_only_exports_report_no_memory_records() {
     assert!(report.entries.is_empty());
 }
 
+/// Reads the single memory file of a freshly written home, edits it, and hands the edited home back
+/// as a source inventory plus a plan; group 1/3/4 (DEC-21 A) all classify instead of failing.
+/// `titled` injects a frontmatter title equal to the derived display value, the R1 shape where a
+/// body edit used to strand the title as unknown source metadata.
+fn home_edit_round(titled: bool, edit: fn(&str) -> String) -> (PlanReport, Vec<ReaderOutput>) {
+    let directory = fixture("markdown");
+    if titled {
+        let note = directory.path().join("source/note.md");
+        let text = fs::read_to_string(&note).unwrap();
+        fs::write(
+            &note,
+            text.replacen(
+                "name: Synthetic preference",
+                "name: Synthetic preference\ntitle: 合成记忆",
+                1,
+            ),
+        )
+        .unwrap();
+    }
+    let target = directory.path().join("target");
+    let migration = engine(&target);
+    let first = migration
+        .plan(&directory.path().join("source"), policy(GateAction::Pass))
+        .unwrap();
+    apply(&migration, &first);
+    let note = target.join(format!("memories/{}.md", first.entries[0].canonical_id));
+    fs::write(&note, edit(&fs::read_to_string(&note).unwrap())).unwrap();
+    let inventory: FileInventory = fs::read_dir(target.join("memories"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                format!("memories/{}", entry.file_name().to_str().unwrap()),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    let outputs = read(&MarkdownReader, inventory);
+    let plan = engine(&directory.path().join("another-home"))
+        .plan(&target, policy(GateAction::Pass))
+        .unwrap();
+    (plan, outputs)
+}
+
+/// Group 1 (DEC-21 A): editing the body of a home note is a fact, reported as okf_body_changed, and
+/// the plan keeps running for both a titled and a title-less original note; the display title never
+/// surfaces as unknown source metadata (R1). The titled variant edits the first body line, the drift
+/// shape where the derived title moves away from the file's title line.
+#[test]
+fn home_body_edits_are_facts_and_never_fail_the_plan() {
+    /// One body-edit shape: whether the original note carries a matching title, and how the edit runs.
+    type BodyEdit = (bool, fn(&str) -> String);
+    let variants: [BodyEdit; 2] = [
+        (false, |text| format!("{text}Edited by user.\n")),
+        (true, |text| {
+            text.replacen("# 合成记忆", "# Edited heading", 1)
+        }),
+    ];
+    for (titled, edit) in variants {
+        let (plan, outputs) = home_edit_round(titled, edit);
+        assert!(
+            plan.entries
+                .iter()
+                .all(|entry| entry.disposition == Disposition::Accepted)
+        );
+        assert_eq!(
+            outputs
+                .iter()
+                .flat_map(|output| &output.anomalies)
+                .filter(|anomaly| anomaly.code == "okf_body_changed"
+                    && anomaly.field_path.as_deref() == Some("/body"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outputs
+                .iter()
+                .flat_map(|output| &output.anomalies)
+                .filter(|anomaly| anomaly.code == "okf_title_divergent")
+                .count(),
+            usize::from(titled)
+        );
+        let source = &outputs[0].source_records[0];
+        assert!(source.unmapped.is_empty(), "{:?}", source.unmapped);
+        assert!(
+            source
+                .field_map
+                .iter()
+                .any(|mapping| mapping.source_path == "/frontmatter/title"
+                    && mapping.canonical_path.is_empty())
+        );
+        // The envelope keeps the original note's preserved unknown fields; a titled original note
+        // legitimately still carries its own title there, while a title-less original has none.
+        let preserved_title = outputs[0].records[0]
+            .source_extra
+            .as_ref()
+            .and_then(|extra| extra.get("frontmatter"))
+            .and_then(Value::as_object)
+            .and_then(|frontmatter| frontmatter.get("title"))
+            .cloned();
+        assert_eq!(preserved_title, titled.then(|| json!("合成记忆")));
+    }
+}
+
+/// Group 3 (DEC-21 A): a user-renamed display title is advisory — reported as a divergence, kept out
+/// of unmapped and source_extra, and the plan keeps running (R1 symptom two).
+#[test]
+fn home_title_edits_are_advisory_and_reported() {
+    let (plan, outputs) = home_edit_round(false, |text| {
+        text.replacen("title: ", "title: Renamed by user — ", 1)
+    });
+    assert!(
+        plan.entries
+            .iter()
+            .all(|entry| entry.disposition == Disposition::Accepted)
+    );
+    assert_eq!(
+        outputs
+            .iter()
+            .flat_map(|output| &output.anomalies)
+            .filter(|anomaly| anomaly.code == "okf_title_divergent"
+                && anomaly.field_path.as_deref() == Some("/frontmatter/title"))
+            .count(),
+        1
+    );
+    // The body is untouched, so the body-change detector stays silent.
+    assert!(
+        outputs
+            .iter()
+            .flat_map(|output| &output.anomalies)
+            .all(|anomaly| anomaly.code != "okf_body_changed")
+    );
+    let source = &outputs[0].source_records[0];
+    assert!(source.unmapped.is_empty(), "{:?}", source.unmapped);
+    // The untitled original keeps no title in preserved source metadata, so any title key here
+    // would be a leak of the current display value.
+    let leaked = outputs[0].records[0]
+        .source_extra
+        .as_ref()
+        .and_then(|extra| extra.get("frontmatter"))
+        .and_then(Value::as_object)
+        .is_some_and(|frontmatter| frontmatter.contains_key("title"));
+    assert!(!leaked);
+}
+
+/// Group 4 (DEC-21 A): editing provenance fields is reported and never adopted — the planned record
+/// hash equals the untouched round trip's, so the envelope stays authoritative.
+#[test]
+fn home_provenance_edits_stay_envelope_authoritative() {
+    let (baseline, _) = home_edit_round(false, |text| text.to_owned());
+    let (edited, outputs) = home_edit_round(false, |text| {
+        text.replacen("resource: note.md", "resource: different-source.md", 1)
+    });
+    assert_eq!(
+        edited.digest_inputs.records[0].record_hash,
+        baseline.digest_inputs.records[0].record_hash
+    );
+    assert_eq!(
+        outputs
+            .iter()
+            .flat_map(|output| &output.anomalies)
+            .filter(|anomaly| anomaly.code == "okf_provenance_divergent"
+                && anomaly.field_path.as_deref() == Some("/frontmatter/sources"))
+            .count(),
+        1
+    );
+    // The body is untouched in this round, so the body-change detector must stay silent; this is the
+    // unedited half of the `!=` mutation the issue requires to stay killed.
+    assert!(
+        outputs
+            .iter()
+            .flat_map(|output| &output.anomalies)
+            .all(|anomaly| anomaly.code != "okf_body_changed")
+    );
+}
+
 // Home preservation: recovering metadata must not invent identities or resolve source/envelope conflicts.
 
 /// Checks approved fixture writes recover complete record hashes and original identities when the home becomes a source.
