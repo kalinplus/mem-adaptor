@@ -15,9 +15,11 @@ use mem_adaptor_core::governance::{
 };
 use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::{Registry, SourceKind};
-use mem_adaptor_core::reports::{ReceiptReport, SatelliteSpec};
+use mem_adaptor_core::reports::{ReceiptReport, SatelliteSpec, Verification};
 use mem_adaptor_core::satellite::{self, RelocationCandidate, Resolution, SourceDetection};
 use mem_adaptor_core::writer;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// A loaded home: its directory and the validated configuration holding policy plus the satellite registry.
 #[derive(Debug, Clone)]
@@ -298,6 +300,132 @@ pub fn converge_registry(
 /// target writes and registry convergence, so the caller reports it as a partially completed run.
 pub fn file_receipts(home: &Home, receipts: &[ReceiptReport]) -> Result<Vec<PathBuf>> {
     satellite::save_receipts(&home.directory, receipts)
+}
+
+/// The home's control directory: configuration, satellite registry, receipts, and filed plans (DEC-19).
+pub fn control_dir(home: &Path) -> PathBuf {
+    home.join(".mem-adaptor")
+}
+
+/// Default plan location for a home-mode run: `<home>/.mem-adaptor/plans/<satellite ID>/<run id>.json`
+/// (DEC-19). The plan file is this run's own output rather than a target write: filing it does not touch the
+/// read-only plan stage, whose no-write rule covers the target and the state protecting it.
+pub fn plan_path(home: &Home, satellite_id: &str, run_id: &str) -> PathBuf {
+    control_dir(&home.directory)
+        .join("plans")
+        .join(satellite_id)
+        .join(format!("{run_id}.json"))
+}
+
+/// One receipt from a satellite's chain, keyed for newest-first ordering by filing time and run id.
+struct FiledReceipt {
+    created_at: OffsetDateTime,
+    run_id: String,
+    path: PathBuf,
+    receipt: ReceiptReport,
+}
+
+/// Loads every receipt of one satellite's chain that touched `target_id`; an unreadable or invalid receipt
+/// is a refused execution basis rather than a skipped file, mirroring `latest_receipts` (DEC-20).
+fn chain_receipts(home: &Home, satellite_id: &str, target_id: &str) -> Result<Vec<FiledReceipt>> {
+    let directory = satellite::receipts_dir(&home.directory, satellite_id);
+    let items = match fs::read_dir(&directory) {
+        Ok(items) => items,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Cannot read satellite receipt directory: {}",
+                    mem_adaptor_core::gate::mask(&directory.to_string_lossy())
+                )
+            });
+        }
+    };
+    let mut filed = Vec::new();
+    for item in items {
+        let path = item?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let receipt = satellite::read_receipt(&path)?;
+        if !receipt.targets.iter().any(|target| target.id == target_id) {
+            continue;
+        }
+        let created_at = OffsetDateTime::parse(&receipt.created_at, &Rfc3339)
+            .with_context(|| format!("Invalid receipt timestamp for {}", receipt.run_id))?;
+        filed.push(FiledReceipt {
+            created_at,
+            run_id: receipt.run_id.clone(),
+            path,
+            receipt,
+        });
+    }
+    Ok(filed)
+}
+
+/// Picks the unique newest receipt of a set; two receipts sharing the newest filing time cannot be ordered
+/// reliably, so the run refuses instead of guessing which history applies.
+fn newest(mut receipts: Vec<FiledReceipt>) -> Result<Option<FiledReceipt>> {
+    if receipts.is_empty() {
+        return Ok(None);
+    }
+    receipts.sort_by(|a, b| (&a.created_at, &a.run_id).cmp(&(&b.created_at, &b.run_id)));
+    let best = receipts.last().unwrap();
+    let best_key = (&best.created_at, &best.run_id);
+    ensure!(
+        receipts
+            .iter()
+            .filter(|item| (&item.created_at, &item.run_id) == best_key)
+            .count()
+            == 1,
+        "Two receipts share the newest filing time; the applicable history is ambiguous"
+    );
+    Ok(receipts.pop())
+}
+
+/// The satellite's own most recent receipt for this target, used as the run's previous receipt when the
+/// caller did not supply one explicitly (DEC-18 chain per satellite).
+pub fn satellite_previous(
+    home: &Home,
+    satellite_id: &str,
+    target_id: &str,
+) -> Result<Option<PathBuf>> {
+    Ok(newest(chain_receipts(home, satellite_id, target_id)?)?.map(|item| item.path))
+}
+
+/// Locates the shared-artifact basis (DEC-19): the most recent completed and verified receipt for the same
+/// target across every registered satellite's chain. Qualification requires the same target id, Writer, and
+/// target location, plus at least one verified entry, so no-op, blocked, or failed runs never advance the
+/// shared write basis. No unique reliable receipt yields `None`, and the engine then keeps the single-chain
+/// check instead of guessing a basis.
+pub fn latest_shared_basis(
+    home: &Home,
+    target_id: &str,
+    writer_id: &str,
+    location: &Path,
+) -> Result<Option<PathBuf>> {
+    let entries = home.config.satellites.as_deref().unwrap_or_default();
+    let mut candidates = Vec::new();
+    for entry in entries {
+        for item in chain_receipts(home, entry.id.as_str(), target_id)? {
+            let target = item
+                .receipt
+                .targets
+                .iter()
+                .find(|target| target.id == target_id)
+                .unwrap();
+            if target.writer != writer_id
+                || target.location != location.to_string_lossy()
+                || !item.receipt.entries.iter().any(|entry| {
+                    entry.target == target_id && entry.verification == Some(Verification::Verified)
+                })
+            {
+                continue;
+            }
+            candidates.push(item);
+        }
+    }
+    Ok(newest(candidates)?.map(|item| item.path))
 }
 
 /// Returns the canonical path a directory source binds, and `None` for an export bundle (DEC-20 item 4).
@@ -975,6 +1103,134 @@ mod tests {
         assert_eq!(resolved.spec.label.as_deref(), Some("vault"));
         assert_eq!(resolved.rebind, None);
         assert!(!resolved.issues);
+        drop(temporary);
+    }
+
+    #[test]
+    fn latest_shared_basis_picks_the_newest_verified_write_across_satellites() {
+        let (temporary, home_directory) = canonical_home(vec![
+            bound_entry("abcd2345", Path::new("/synthetic/vault")),
+            bound_entry("wxyz2345", Path::new("/synthetic/other")),
+        ]);
+        let home = Home {
+            directory: home_directory.clone(),
+            config: satellite::read_config(&satellite::home_config_path(&home_directory))
+                .unwrap()
+                .unwrap(),
+        };
+        let fingerprint = Fingerprint {
+            source_record_id: "note-0".into(),
+            content_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .into(),
+        };
+        let older = chain_receipt(
+            "abcd2345",
+            "receipt-old",
+            "2026-10-05T12:00:00Z",
+            std::slice::from_ref(&fingerprint),
+        );
+        file_chain_receipt(&home_directory, "abcd2345", &older);
+        let newer = chain_receipt(
+            "wxyz2345",
+            "receipt-new",
+            "2026-10-06T12:00:00Z",
+            std::slice::from_ref(&fingerprint),
+        );
+        file_chain_receipt(&home_directory, "wxyz2345", &newer);
+        // An even newer no-op receipt has no verified entry, so it never advances the shared basis.
+        let mut skipped = chain_receipt(
+            "abcd2345",
+            "receipt-skipped",
+            "2026-10-07T12:00:00Z",
+            std::slice::from_ref(&fingerprint),
+        );
+        for entry in skipped["entries"].as_array_mut().unwrap() {
+            for field in ["verification", "target_id", "prior_write"] {
+                entry.as_object_mut().unwrap().remove(field);
+            }
+            entry["disposition"] = json!({
+                "status": "omitted",
+                "reason": {"code": "already_migrated"}
+            });
+        }
+        file_chain_receipt(&home_directory, "abcd2345", &skipped);
+        let basis = latest_shared_basis(&home, "home", "okf", Path::new("synthetic-home"))
+            .unwrap()
+            .expect("the newest verified write is the basis");
+        assert_eq!(
+            basis,
+            satellite::receipts_dir(&home_directory, "wxyz2345").join("receipt-new.json")
+        );
+        // A different Writer or location never qualifies, and a chain without verified entries yields
+        // no basis at all rather than a guess.
+        assert!(
+            latest_shared_basis(&home, "home", "ump", Path::new("synthetic-home"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            latest_shared_basis(&home, "home", "okf", Path::new("/somewhere/else"))
+                .unwrap()
+                .is_none()
+        );
+        drop(temporary);
+    }
+
+    #[test]
+    fn a_corrupt_receipt_in_the_chain_refuses_instead_of_degrading_the_history() {
+        let (temporary, home_directory) =
+            canonical_home(vec![bound_entry("abcd2345", Path::new("/synthetic/vault"))]);
+        let home = Home {
+            directory: home_directory.clone(),
+            config: satellite::read_config(&satellite::home_config_path(&home_directory))
+                .unwrap()
+                .unwrap(),
+        };
+        fs::create_dir_all(satellite::receipts_dir(&home_directory, "abcd2345")).unwrap();
+        fs::write(
+            satellite::receipts_dir(&home_directory, "abcd2345").join("torn.json"),
+            "{",
+        )
+        .unwrap();
+        let error =
+            latest_shared_basis(&home, "home", "okf", Path::new("synthetic-home")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid receipt JSON or fields"),
+            "{error:#}"
+        );
+        drop(temporary);
+    }
+
+    #[test]
+    fn an_ambiguous_newest_pair_refuses_to_pick_a_shared_basis() {
+        let (temporary, home_directory) = canonical_home(vec![
+            bound_entry("abcd2345", Path::new("/synthetic/vault")),
+            bound_entry("wxyz2345", Path::new("/synthetic/other")),
+        ]);
+        let home = Home {
+            directory: home_directory.clone(),
+            config: satellite::read_config(&satellite::home_config_path(&home_directory))
+                .unwrap()
+                .unwrap(),
+        };
+        let fingerprint = Fingerprint {
+            source_record_id: "note-0".into(),
+            content_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .into(),
+        };
+        // Two chains share the newest filing time and run id ordering key, so no unique basis exists.
+        for satellite_id in ["abcd2345", "wxyz2345"] {
+            let receipt = chain_receipt(
+                satellite_id,
+                "receipt-tie",
+                "2026-10-05T12:00:00Z",
+                std::slice::from_ref(&fingerprint),
+            );
+            file_chain_receipt(&home_directory, satellite_id, &receipt);
+        }
+        let error =
+            latest_shared_basis(&home, "home", "okf", Path::new("synthetic-home")).unwrap_err();
+        assert!(format!("{error:#}").contains("ambiguous"), "{error:#}");
         drop(temporary);
     }
 

@@ -506,10 +506,15 @@ fn a_failed_home_receipt_save_reports_partial_completion() {
         report.to_str().unwrap(),
     ]);
     assert!(plan.status.success());
-    // Breaking the receipts root after planning makes the final receipt save fail after the
-    // engine already wrote targets and the registry already converged.
-    fs::remove_dir_all(home.join(".mem-adaptor/receipts")).unwrap();
-    fs::write(home.join(".mem-adaptor/receipts"), b"not a directory").unwrap();
+    // Making the satellite's receipt directory read-only after planning breaks only the final receipt
+    // save: the history receipts stay readable, so execution-basis checks pass, targets are written, the
+    // registry converges, and the failure is reported as happening after both. Permission bits would not
+    // stop a root user; this suite never runs as root, so the injection stays reliable here.
+    let receipts = home.join(format!(".mem-adaptor/receipts/{satellite}"));
+    let mut permissions = fs::metadata(&receipts).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    permissions.set_mode(0o555);
+    fs::set_permissions(&receipts, permissions).unwrap();
     let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
     assert!(!apply.status.success());
     let stderr = String::from_utf8_lossy(&apply.stderr);
@@ -518,6 +523,10 @@ fn a_failed_home_receipt_save_reports_partial_completion() {
     // Partial completion is observable: the satellite is registered and targets were written.
     assert_eq!(registry(&home)[0]["id"].as_str().unwrap(), satellite);
     assert!(home.join("memories").is_dir());
+    // Restore write permission so the temporary directory can be cleaned up.
+    let mut permissions = fs::metadata(&receipts).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&receipts, permissions).unwrap();
 }
 
 #[test]
@@ -562,4 +571,277 @@ fn an_explicit_receipt_override_in_home_mode_warns_and_leaves_the_chain_alone() 
     assert!(receipt.is_file());
     // The chain is untouched by the overridden run.
     assert_eq!(tree(&chain), chain_before);
+}
+
+/// Extracts the default plan path a home-mode run printed, so tests can apply the filed plan.
+fn filed_plan(output: &Output) -> PathBuf {
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("Plan filed: "))
+        .expect("home plan prints its filed path");
+    PathBuf::from(line.trim_start_matches("Plan filed: "))
+}
+
+/// Checks the A -> B -> A acceptance (#33): two satellites converge into one home with plans and receipts
+/// filed under the control directory by default, history is picked from the home without flags, and each
+/// satellite's next round reconciles shared products against the latest verified basis instead of mistaking
+/// the other satellite's write for tampering.
+#[test]
+fn a_to_b_to_a_convergence_files_plans_by_default_and_never_rejects_legitimate_writes() {
+    let root = TempDir::new().unwrap();
+    let (home, source_a, satellite_a) = lifecycle(root.path(), "Vault A");
+    let target = format!("okf:{}", home.display());
+
+    // Satellite B is a second source; its plan files under <home>/.mem-adaptor/plans/<id>/ by default.
+    let source_b = root.path().join("source-b");
+    fs::create_dir_all(&source_b).unwrap();
+    fs::write(source_b.join("b-note.md"), "# B note\n\nbody b").unwrap();
+    let plan_b = cli(&["plan", source_b.to_str().unwrap(), "--to", &target]);
+    assert!(
+        plan_b.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan_b.stderr)
+    );
+    let satellite_b = satellite_from(&plan_b);
+    assert_ne!(satellite_a, satellite_b);
+    let plan_b_path = filed_plan(&plan_b);
+    let canonical_home = fs::canonicalize(&home).unwrap();
+    assert_eq!(
+        plan_b_path,
+        canonical_home
+            .join(format!(".mem-adaptor/plans/{satellite_b}"))
+            .join(plan_b_path.file_name().unwrap())
+    );
+    let apply_b = cli(&["apply", plan_b_path.to_str().unwrap(), "--yes"]);
+    assert!(
+        apply_b.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply_b.stderr)
+    );
+    let index = fs::read_to_string(home.join("index.md")).unwrap();
+    assert!(index.contains("Note 0"), "{index}");
+    assert!(index.contains("B note"), "{index}");
+
+    // A re-plans with no flags at all: the previous receipt and shared basis come from the home.
+    let plan_a2 = cli(&["plan", source_a.to_str().unwrap(), "--to", &target]);
+    assert!(
+        plan_a2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan_a2.stderr)
+    );
+    let plan_a2_path = filed_plan(&plan_a2);
+    let report: Value = serde_json::from_str(&fs::read_to_string(&plan_a2_path).unwrap()).unwrap();
+    let basis = report["shared_basis_ref"].as_str().unwrap();
+    assert!(
+        basis.contains(&format!(".mem-adaptor/receipts/{satellite_b}")),
+        "the latest verified write is B's receipt: {basis}"
+    );
+    assert!(report["digest_inputs"]["shared_basis_hash"].is_string());
+    assert!(
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["disposition"]["status"] == "omitted"),
+        "A's own records are already migrated, not unresolved: {}",
+        serde_json::to_string(&report["entries"]).unwrap()
+    );
+    let apply_a2 = cli(&["apply", plan_a2_path.to_str().unwrap(), "--yes"]);
+    assert!(
+        apply_a2.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply_a2.stderr)
+    );
+    // Both chains exist per satellite and the index still lists both satellites' notes.
+    assert!(
+        home.join(format!(".mem-adaptor/receipts/{satellite_a}"))
+            .is_dir()
+    );
+    let index = fs::read_to_string(home.join("index.md")).unwrap();
+    assert!(
+        index.contains("Note 0") && index.contains("B note"),
+        "{index}"
+    );
+}
+
+/// Checks #33: a user edit of a shared artifact is never overwritten. The next plan of any satellite
+/// keeps its entries unresolved, apply performs no target change, and the edit survives verbatim.
+#[test]
+fn a_user_edited_shared_index_is_refused_and_survives_verbatim() {
+    let root = TempDir::new().unwrap();
+    let (home, source, _satellite) = lifecycle(root.path(), "Vault");
+    let index = home.join("index.md");
+    let edited = format!("{}\nuser edit\n", fs::read_to_string(&index).unwrap());
+    fs::write(&index, &edited).unwrap();
+    let before = tree(&home);
+
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let path = filed_plan(&plan);
+    let report: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["disposition"]["status"] == "unresolved"
+                && entry["disposition"]["reason"]["code"] == "target_modified"),
+        "{}",
+        serde_json::to_string(&report["entries"]).unwrap()
+    );
+    let apply = cli(&["apply", path.to_str().unwrap(), "--yes"]);
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    // Nothing in the home's data area changed: the user's edit survives byte for byte.
+    let after = tree(&home);
+    for (path, bytes) in &before {
+        if path.contains(".mem-adaptor") {
+            continue;
+        }
+        assert_eq!(after.get(path), Some(bytes), "unchanged: {path}");
+    }
+    assert_eq!(fs::read_to_string(&index).unwrap(), edited);
+}
+
+/// Checks #33: when the shared-basis receipt becomes unreadable after planning, apply refuses before any
+/// target write — approval was recorded, but the home's data area keeps its exact bytes.
+#[test]
+fn a_broken_shared_basis_refuses_before_target_writes() {
+    let root = TempDir::new().unwrap();
+    let (home, source, satellite) = lifecycle(root.path(), "Vault");
+    // A second round plan carries a shared basis; breaking the receipts root afterwards makes that
+    // basis unreadable.
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &format!("okf:{}", home.display()),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let path = filed_plan(&plan);
+    let before = tree(&home);
+    fs::remove_dir_all(home.join(".mem-adaptor/receipts")).unwrap();
+    fs::write(home.join(".mem-adaptor/receipts"), b"not a directory").unwrap();
+    let apply = cli(&["apply", path.to_str().unwrap(), "--yes"]);
+    assert!(!apply.status.success());
+    let stderr = String::from_utf8_lossy(&apply.stderr);
+    assert!(stderr.contains("[S7]"), "{stderr}");
+    // No target byte changed and the satellite's registration survives with no new receipt.
+    let after = tree(&home);
+    for (path, bytes) in &before {
+        if path.contains(".mem-adaptor/receipts") {
+            continue;
+        }
+        assert_eq!(after.get(path), Some(bytes), "unchanged: {path}");
+    }
+    assert_eq!(registry(&home)[0]["id"].as_str().unwrap(), satellite);
+}
+
+/// Checks #33: the control directory is never a memory source. Reading the home itself as a source (a
+/// move-the-home migration) claims the managed memory files but nothing under `.mem-adaptor/`.
+#[test]
+fn a_report_inside_the_home_control_directory_is_accepted_but_one_inside_the_home_is_not() {
+    let root = TempDir::new().unwrap();
+    let (home, source, _satellite) = lifecycle(root.path(), "Vault");
+    let target = format!("okf:{}", home.display());
+    // The control directory is inside the home, so it carries the same exemption the apply side grants.
+    let explicit = home.join(".mem-adaptor/explicit-plan.json");
+    let plan = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        explicit.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert!(explicit.exists());
+    // Anywhere else inside the home is memory content and stays refused.
+    let stray = home.join("stray-plan.json");
+    let refused = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        stray.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("Report must be outside source and target directories"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!stray.exists());
+}
+
+#[test]
+fn the_control_directory_is_never_a_memory_source() {
+    let root = TempDir::new().unwrap();
+    let (home, _source, _satellite) = lifecycle(root.path(), "Vault");
+    fs::create_dir_all(home.join(".mem-adaptor/notes")).unwrap();
+    fs::write(
+        home.join(".mem-adaptor/notes/stray.md"),
+        "# Stray\n\nshould not be claimed",
+    )
+    .unwrap();
+    // The ChatGPT Reader claims any `*.chatgpt.md` path, so this file would be claimed if the control
+    // directory were not excluded from claim input as well as from the inventory.
+    fs::write(
+        home.join(".mem-adaptor/notes/stray.chatgpt.md"),
+        "# Stray\n\nshould not be claimed",
+    )
+    .unwrap();
+    let report = root.path().join("plan-control.json");
+    let target = root.path().join("elsewhere");
+    let plan = cli(&[
+        "plan",
+        home.to_str().unwrap(),
+        "--to",
+        &format!("ump:{}", target.display()),
+        "--report",
+        report.to_str().unwrap(),
+    ]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&report).unwrap()).unwrap();
+    let files: Vec<&str> = parsed["source_inventory"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|file| file["path"].as_str())
+        .collect();
+    assert!(
+        files.iter().all(|path| !path.starts_with(".mem-adaptor/")),
+        "{files:?}"
+    );
+    assert!(
+        files.iter().any(|path| path.starts_with("memories/")),
+        "{files:?}"
+    );
 }

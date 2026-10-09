@@ -51,8 +51,9 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         to: String,
+        /// Where the plan report is written; home mode files it under <home>/.mem-adaptor/plans/ by default.
         #[arg(long)]
-        report: PathBuf,
+        report: Option<PathBuf>,
         /// Use the preceding receipt for idempotency and deletion protection.
         #[arg(long)]
         previous_receipt: Option<PathBuf>,
@@ -155,19 +156,37 @@ fn run() -> Result<()> {
             let target = mem_adaptor_core::writer::normalize_root(Path::new(target)).context(
                 "[S5] Target path validation failed before target writes; target unchanged. Choose a regular target directory, not a linked root, and plan again",
             )?;
-            let report_path = normalize_path(&report)?;
+            // An okf target that carries a registry is a home; everything else stays a direct migration.
+            let home = crate::home::detect(writer, &target)
+                .map(|directory| crate::home::load(&directory))
+                .transpose()?;
+            // Reports default into the home's control directory (DEC-19), which lives inside the target;
+            // only that directory is exempt from the inside-a-target guard, as on the apply side.
+            let control = home
+                .as_ref()
+                .map(|home| crate::home::control_dir(&home.directory));
+            let report_path = match &report {
+                Some(report) => {
+                    let path = normalize_path(report)?;
+                    let in_control = control
+                        .as_ref()
+                        .is_some_and(|control| path.starts_with(control));
+                    ensure!(
+                        !path.starts_with(&source) && (!path.starts_with(&target) || in_control),
+                        "Report must be outside source and target directories"
+                    );
+                    Some(path)
+                }
+                None => None,
+            };
             ensure!(
                 !target.starts_with(&source) && !source.starts_with(&target),
                 "Source and target directories must not overlap"
             );
             ensure!(
-                !report_path.starts_with(&target) && !report_path.starts_with(&source),
-                "Report must be outside source and target directories"
+                report_path.is_some() || home.is_some(),
+                "--report is required for a direct migration; a home files its plans under <home>/.mem-adaptor/plans/"
             );
-            // An okf target that carries a registry is a home; everything else stays a direct migration.
-            let home = crate::home::detect(writer, &target)
-                .map(|directory| crate::home::load(&directory))
-                .transpose()?;
             if home.is_none() && writer == "okf" {
                 println!(
                     "NOTE: {} has no .mem-adaptor/config.toml, so this is a direct migration. \
@@ -176,7 +195,7 @@ fn run() -> Result<()> {
                     target.display()
                 );
             }
-            let engine = engine(&[("home".into(), writer.into(), target)])?;
+            let engine = engine(&[("home".into(), writer.into(), target.clone())])?;
             let interactive = io::stdin().is_terminal();
             let secret_action = secret_policy.as_deref().map(|action| {
                 if action == "block" {
@@ -254,15 +273,50 @@ fn run() -> Result<()> {
                     )
                 }
             };
-            let report = match &spec {
-                Some(spec) => {
-                    engine.plan_with_satellite(&source, policy, spec, previous_receipt.as_deref())
+            let (report, report_path) = {
+                // Home mode takes its history from the home: the satellite's own newest receipt when no
+                // explicit --previous was given, plus the shared-artifact basis across all satellites
+                // (DEC-18 chains, DEC-19 shared products). Direct mode keeps explicit-only history.
+                let previous = match (&home, &spec) {
+                    (Some(home), Some(spec)) => match &previous_receipt {
+                        Some(path) => Some(path.clone()),
+                        None => crate::home::satellite_previous(home, spec.id.as_str(), "home")?,
+                    },
+                    _ => previous_receipt.clone(),
+                };
+                let shared_basis = match &home {
+                    Some(home) => crate::home::latest_shared_basis(home, "home", writer, &target)?,
+                    None => None,
+                };
+                let report = match &spec {
+                    Some(spec) => engine.plan_with_satellite(
+                        &source,
+                        policy,
+                        spec,
+                        previous.as_deref(),
+                        shared_basis.as_deref(),
+                    ),
+                    None => engine.plan_with_previous(&source, policy, previous.as_deref()),
                 }
-                None => engine.plan_with_previous(&source, policy, previous_receipt.as_deref()),
-            }
-            .context("Planning failed before target writes; target unchanged. Check the source, policy and any explicitly supplied previous receipt before planning again")?;
+                .context("Planning failed before target writes; target unchanged. Check the source, policy and any explicitly supplied previous receipt before planning again")?;
+                let path = match &report_path {
+                    Some(path) => path.clone(),
+                    None => {
+                        let home = home.as_ref().expect("home mode owns the default plan path");
+                        let satellite = spec.as_ref().expect("home mode requires a satellite");
+                        let path =
+                            crate::home::plan_path(home, satellite.id.as_str(), &report.run_id);
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+                        path
+                    }
+                };
+                (report, path)
+            };
             write_json_new(&report_path, &report)?;
             println!("Plan: {} records; target unchanged.", report.entries.len());
+            println!("Plan filed: {}", report_path.display());
             print_gate_summary(
                 &report.gate_policy,
                 report
@@ -348,6 +402,11 @@ fn run() -> Result<()> {
                 );
             }
             let approval_path = plan_path.with_extension("approval.json");
+            // Reports default into the home's control directory (DEC-19), which lives inside the target;
+            // only that directory is exempt from the inside-a-target guard.
+            let control = home
+                .as_ref()
+                .map(|home| crate::home::control_dir(&home.directory));
             for path in [&approval_path].into_iter().chain(receipt_path.as_ref()) {
                 ensure!(!path.exists(), "Output report already exists");
                 ensure!(
@@ -355,9 +414,12 @@ fn run() -> Result<()> {
                     "Report cannot be inside the source"
                 );
                 ensure!(
-                    targets
-                        .iter()
-                        .all(|(_, _, target)| !path.starts_with(target)),
+                    targets.iter().all(|(_, _, target)| {
+                        !path.starts_with(target)
+                            || control
+                                .as_ref()
+                                .is_some_and(|control| path.starts_with(control))
+                    }),
                     "Report cannot be inside a target"
                 );
             }

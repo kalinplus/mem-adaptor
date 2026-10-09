@@ -30,7 +30,8 @@
     "bundle_manifest": {"$ref": "#/$defs/manifest"},
     "digest_inputs": {"$ref": "#/$defs/digest_inputs"},
     "plan_digest": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
-    "previous_receipt_ref": {"type": "string", "minLength": 1}
+    "previous_receipt_ref": {"type": "string", "minLength": 1},
+    "shared_basis_ref": {"type": "string", "minLength": 1, "description": "Path of the receipt this plan reconciled shared products against (DEC-19 shared artifacts)."}
   },
   "$defs": {
     "source": {
@@ -282,6 +283,7 @@
       "type": "object", "additionalProperties": false, "required": ["records", "targets", "writers", "gate_policy"],
       "properties": {
         "previous_receipt_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash", "description": "Exact bytes of the complete loaded previous receipt, including carried history."},
+        "shared_basis_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash", "description": "Exact bytes of the shared-artifact basis receipt this plan reconciled against."},
         "records": {
           "type": "array", "items": {
             "type": "object", "additionalProperties": false, "required": ["canonical_id", "content_hash", "record_hash", "predictions"],

@@ -50,6 +50,7 @@
       ]
     },
     "digest_inputs": {
+      "shared_basis_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "records": [
         {"canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "record_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "predictions": [{"target": "home", "disposition": {"status": "accepted"}, "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}]}]}
       ],
@@ -59,6 +60,7 @@
       ],
       "gate_policy": {"secrets": "pass", "high_risk_pii": "pass", "rule_allowlist": [], "origin": "default", "user_selected": false}
     },
-    "plan_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    "plan_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "shared_basis_ref": "/isolated/home/.mem-adaptor/receipts/abcd2345/receipt-1791513709225604000.json"
   }
 }
