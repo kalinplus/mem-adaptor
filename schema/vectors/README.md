@@ -51,5 +51,6 @@ M6 `init` adds the optional top-level config `satellites` registry: each entry c
 a display-only `label`, the detected `system`, an RFC 3339 `created_at`, and an optional `path` that
 export-bundle satellites omit. The registry is append-only after an approved apply; direct-mode user
 configuration stays valid without it (`valid/config-direct.json`).
-The 80 invalid cases also reject wrong-alphabet or wrong-length registry IDs, unknown registry members,
-missing system/issuance fields, non-RFC 3339 issuance times, empty labels, and empty registered paths.
+The 83 invalid cases also reject wrong-alphabet or wrong-length registry IDs, unknown registry members,
+missing system/issuance fields, non-RFC 3339 issuance times, empty labels, empty registered paths, and
+payload keys on the payload-free `target_unmanaged` refusal.

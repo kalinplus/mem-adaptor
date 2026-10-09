@@ -103,6 +103,18 @@ pub struct ReadBack {
 pub struct TargetState {
     pub record: Option<CanonicalRecord>,
     pub target_hash: Option<String>,
+    /// Non-fatal damage classification for planning (DEC-21 A/D): `None` means healthy or absent, and
+    /// Writers that cannot classify leave it unset so the engine keeps its legacy behaviour.
+    pub classification: Option<TargetClassification>,
+}
+
+/// Reports why a managed target file is not a healthy managed record (DEC-21 A/D).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetClassification {
+    /// The management envelope is gone: the file is an ordinary user note at our target path.
+    Unmanaged,
+    /// The envelope parses but fails schema or consistency validation.
+    ManagedInvalid,
 }
 
 pub trait Writer {
@@ -126,6 +138,7 @@ pub trait Writer {
                     TargetState {
                         record: self.inspect(id)?,
                         target_hash: self.target_hash(id)?,
+                        classification: None,
                     },
                 ))
             })

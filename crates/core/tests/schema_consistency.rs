@@ -467,6 +467,9 @@ fn every_disposition_and_verification_variant_matches_schema() {
             reason: UnresolvedReason::TargetModified,
         },
         Disposition::Unresolved {
+            reason: UnresolvedReason::TargetUnmanaged,
+        },
+        Disposition::Unresolved {
             reason: UnresolvedReason::TargetUntracked,
         },
         Disposition::Rejected {

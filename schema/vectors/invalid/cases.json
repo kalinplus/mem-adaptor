@@ -82,6 +82,7 @@
     {"base": "valid/config.json", "constraint": "registry display labels are nonempty", "patch": [{"op": "add", "path": "/satellites/0/label", "value": ""}]},
     {"base": "valid/config.json", "constraint": "an export bundle registers no path rather than an empty one", "patch": [{"op": "add", "path": "/satellites/1/path", "value": ""}]},
     {"base": "valid/plan.json", "constraint": "the shared-basis reference is a nonempty path", "patch": [{"op": "add", "path": "/shared_basis_ref", "value": ""}]},
-    {"base": "valid/plan.json", "constraint": "the shared-basis hash is a hex digest, not prose", "patch": [{"op": "add", "path": "/digest_inputs/shared_basis_hash", "value": "not-a-hash"}]}
+    {"base": "valid/plan.json", "constraint": "the shared-basis hash is a hex digest, not prose", "patch": [{"op": "add", "path": "/digest_inputs/shared_basis_hash", "value": "not-a-hash"}]},
+    {"base": "valid/plan.json", "constraint": "target_unmanaged carries no payload", "patch": [{"op": "add", "path": "/entries/0/disposition", "value": {"status": "unresolved", "reason": {"code": "target_unmanaged", "cluster_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]}
   ]
 }

@@ -5,7 +5,6 @@
 use anyhow::Context;
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::*;
-use mem_adaptor_core::engine::content_hash;
 use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as normalize;
@@ -93,11 +92,40 @@ impl MarkdownReader {
         let mut record;
         if let Some(metadata) = managed {
             // A home copy keeps the original source identity instead of creating a new identity from its target path.
+            // Home-side edits are facts (DEC-21 A): the body is re-homed and divergent tags adopted,
+            // while advisory-field divergence is reported as anomalies instead of failing the plan.
             record = okf::restore(&metadata, body)?;
-            okf::validate_projection(&metadata, &record)?;
-            if record.content_hash != content_hash(body.as_bytes()) {
+            let edits = okf::apply_home_edits(&mut record, &metadata, body);
+            if edits.body_changed {
                 normalize::anomaly(&mut output, &claim.path, "okf_body_changed", "/body", None);
-                record.content_hash = content_hash(body.as_bytes());
+            }
+            let divergence = okf::classify_native(&metadata, &record);
+            if divergence.title {
+                normalize::anomaly(
+                    &mut output,
+                    &claim.path,
+                    "okf_title_divergent",
+                    "/frontmatter/title",
+                    None,
+                );
+            }
+            if divergence.sources {
+                normalize::anomaly(
+                    &mut output,
+                    &claim.path,
+                    "okf_provenance_divergent",
+                    "/frontmatter/sources",
+                    None,
+                );
+            }
+            if divergence.generated {
+                normalize::anomaly(
+                    &mut output,
+                    &claim.path,
+                    "okf_provenance_divergent",
+                    "/frontmatter/generated",
+                    None,
+                );
             }
             let mut original = normalize::source(&record, &claim.path, fields);
             normalize::map(&mut original, "/body", "/content");
@@ -109,9 +137,9 @@ impl MarkdownReader {
                 "/source",
             );
             let native = okf::native_projection(&record);
-            if metadata.get("title") == native.get("title") {
-                normalize::map(&mut original, "/frontmatter/title", "/content");
-            }
+            // Display titles are advisory (DEC-21 A): consumed unconditionally so a user-edited title
+            // never surfaces as unknown source metadata or collides in source_extra.
+            normalize::map(&mut original, "/frontmatter/title", "");
             // Coverage keeps arrays atomic; this validated projection spans identity, provenance, locator and time.
             normalize::map(&mut original, "/frontmatter/sources", "");
             for (source_path, canonical_path) in [
@@ -126,6 +154,11 @@ impl MarkdownReader {
                         canonical_path,
                     );
                 }
+            }
+            // A tags key the record no longer carries (edited to null) still needs coverage so the
+            // deletion statement is not reported as an unknown field.
+            if metadata.get("tags").is_some() && native.pointer("/tags").is_none() {
+                normalize::map(&mut original, "/frontmatter/tags", "");
             }
             normalize::finish(&mut output, record, original)?;
             return Ok(output);

@@ -772,9 +772,10 @@ fn native_creation_and_log_edits_before_planning_are_never_overwritten() {
     }
 }
 
-/// Rejects edited managed native fields without modifying source input or creating target artifacts.
+/// Provenance edits in a managed file are reported and stay envelope-authoritative; a tags edit is
+/// adopted as the new fact (DEC-21 A). The read never fails on these parseable edits.
 #[test]
-fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
+fn native_projection_edits_are_reported_and_envelope_authoritative_on_import() {
     let directory = fixture();
     let mut original = record();
     original.provenance.actor_kind = ActorKind::User;
@@ -783,16 +784,29 @@ fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
     let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
     let path = format!("{}.md", receipt.entries[0].target_id.as_ref().unwrap());
     let text = fs::read_to_string(directory.path().join("target").join(&path)).unwrap();
-    for edited in [
-        text.replace(
-            "resource: synthetic.json",
-            "resource: different-source.json",
+    // Baseline: the untouched home copy restores to exactly this record.
+    let baseline_record = read_managed(&path, &text).records[0].clone();
+    let before = target_snapshot(&directory.path().join("target"));
+    for (field, edited) in [
+        (
+            "sources",
+            text.replace(
+                "resource: synthetic.json",
+                "resource: different-source.json",
+            ),
         ),
-        text.replacen("synthetic\n", "different-tag\n", 1),
-        text.replacen(
-            "at: \"2026-01-02T03:04:05Z\"",
-            "at: \"2026-03-01T00:00:00Z\"",
-            1,
+        ("tags", text.replacen("synthetic\n", "different-tag\n", 1)),
+        (
+            "tags-scalar",
+            text.replacen("tags:\n- synthetic\n", "tags: solo\n", 1),
+        ),
+        (
+            "generated",
+            text.replacen(
+                "at: \"2026-01-02T03:04:05Z\"",
+                "at: \"2026-03-01T00:00:00Z\"",
+                1,
+            ),
         ),
     ] {
         assert_ne!(edited, text);
@@ -801,20 +815,53 @@ fn generated_okf_metadata_changes_are_not_silently_hidden_on_import() {
             files: [(path.clone(), edited.into_bytes())].into_iter().collect(),
             satellite_id: None,
         };
-        let before = target_snapshot(&directory.path().join("target"));
         let input = source.files.clone();
-        let error = match MarkdownReader.read(&MarkdownReader.claim(&source.files)[0], &source) {
-            Err(error) => error,
-            Ok(_) => panic!("Edited native projection was imported"),
-        };
-        assert!(
-            format!("{error:#}").contains("OKF native projection differs from canonical metadata")
-        );
+        let output = MarkdownReader
+            .read(&MarkdownReader.claim(&source.files)[0], &source)
+            .unwrap();
         assert_eq!(source.files, input);
         assert_eq!(target_snapshot(&directory.path().join("target")), before);
-        assert!(!directory.path().join("plan.approval.json").exists());
-        assert!(!directory.path().join("plan.receipt.json").exists());
+        if field == "sources" || field == "generated" {
+            assert_eq!(
+                output
+                    .anomalies
+                    .iter()
+                    .filter(|anomaly| anomaly.code == "okf_provenance_divergent")
+                    .count(),
+                1,
+                "{field}: {:?}",
+                output.anomalies
+            );
+            assert_eq!(output.records[0], baseline_record);
+        } else {
+            assert!(
+                output
+                    .anomalies
+                    .iter()
+                    .all(|anomaly| anomaly.code != "okf_provenance_divergent")
+            );
+            let mut expected = baseline_record.clone();
+            expected.tags = Some(match field {
+                "tags-scalar" => vec!["solo".into()],
+                _ => vec!["different-tag".into()],
+            });
+            assert_eq!(output.records[0], expected);
+        }
     }
+}
+
+/// Reads one managed file through the Markdown Reader without a full plan, for direct record checks.
+fn read_managed(path: &str, text: &str) -> ReaderOutput {
+    let source = SourceFs {
+        root: "/synthetic".into(),
+        files: [(path.to_owned(), text.as_bytes().to_vec())]
+            .into_iter()
+            .collect(),
+        satellite_id: None,
+    };
+    MarkdownReader
+        .read(&MarkdownReader.claim(&source.files)[0], &source)
+        .unwrap()
 }
 
 #[test]

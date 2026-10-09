@@ -489,6 +489,7 @@ impl Writer for UmpWriter {
                     TargetState {
                         record: item.and_then(|item| item.record.clone()),
                         target_hash: item.map(NativeRecord::target_hash).transpose()?,
+                        classification: None,
                     },
                 ))
             })
