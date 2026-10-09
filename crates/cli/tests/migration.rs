@@ -391,8 +391,14 @@ fn all_secret_signatures_stay_out_of_reports_and_output_in_every_policy() {
             }
         }
         let plan_output = plan_options(&directory, "plan.json", &options);
-        assert!(
-            plan_output.status.success(),
+        // Blocked findings are rejected entries, so that mode cannot be a complete success.
+        assert_eq!(
+            common::exit_code(&plan_output),
+            if mode == "block" {
+                common::EXIT_INCOMPLETE
+            } else {
+                common::EXIT_OK
+            },
             "{}",
             String::from_utf8_lossy(&plan_output.stderr)
         );
@@ -417,8 +423,13 @@ fn all_secret_signatures_stay_out_of_reports_and_output_in_every_policy() {
             }
         );
         let output = apply(&directory, "plan.json");
-        assert!(
-            output.status.success(),
+        assert_eq!(
+            common::exit_code(&output),
+            if mode == "block" {
+                common::EXIT_INCOMPLETE
+            } else {
+                common::EXIT_OK
+            },
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -618,14 +629,16 @@ fn source_updates_use_stable_target_ids_and_double_changes_stay_unresolved() {
     fs::write(directory.path().join("source/a.md"), "Another source edit").unwrap();
     let before = snapshot(&directory.path().join("target"));
     let previous = directory.path().join("update.receipt.json");
-    assert!(
-        plan_options(
-            &directory,
-            "conflict.json",
-            &["--previous-receipt", previous.to_str().unwrap()]
-        )
-        .status
-        .success()
+    let conflict_plan = plan_options(
+        &directory,
+        "conflict.json",
+        &["--previous-receipt", previous.to_str().unwrap()],
+    );
+    assert_eq!(
+        common::exit_code(&conflict_plan),
+        common::EXIT_INCOMPLETE,
+        "{}",
+        String::from_utf8_lossy(&conflict_plan.stderr)
     );
     let conflict = document(&directory, "conflict.json");
     let entry = conflict["entries"]
@@ -647,7 +660,14 @@ fn source_updates_use_stable_target_ids_and_double_changes_stay_unresolved() {
         .find(|cluster| cluster["cluster_id"] == cluster_id)
         .unwrap();
     assert_eq!(cluster["candidates"].as_array().unwrap().len(), 2);
-    assert!(apply(&directory, "conflict.json").status.success());
+    // The conflict stays unwritten, so this apply completes with exit 3 rather than success.
+    let conflict_apply = apply(&directory, "conflict.json");
+    assert_eq!(
+        common::exit_code(&conflict_apply),
+        common::EXIT_INCOMPLETE,
+        "{}",
+        String::from_utf8_lossy(&conflict_apply.stderr)
+    );
     assert_eq!(snapshot(&directory.path().join("target")), before);
 }
 

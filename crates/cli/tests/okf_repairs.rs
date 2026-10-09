@@ -124,7 +124,12 @@ fn plan(engine: &Engine, directory: &TempDir, previous: Option<&Path>) -> PlanRe
 
 /// Obtains the real WriteToken through approved application, without persisting a fake success receipt.
 fn apply(engine: &Engine, report: &PlanReport) -> Result<ReceiptReport> {
-    engine.apply(
+    decide(engine, report, &[])
+}
+
+/// Applies an approved plan while recording explicit cluster decisions, as the interactive CLI does.
+fn decide(engine: &Engine, report: &PlanReport, decisions: &[Verdict]) -> Result<ReceiptReport> {
+    engine.apply_with_decisions(
         report,
         &ApprovalReceipt {
             schema_version: "0.1.0".into(),
@@ -136,6 +141,7 @@ fn apply(engine: &Engine, report: &PlanReport) -> Result<ReceiptReport> {
         },
         "synthetic-plan.json".into(),
         "synthetic-approval.json".into(),
+        decisions,
     )
 }
 
@@ -1214,6 +1220,90 @@ fn take_home_verdicts_need_an_attributable_home_change() {
     let before = snapshot(&directory.path().join("target"));
     apply(&engine, &next).unwrap();
     assert_eq!(snapshot(&directory.path().join("target")), before);
+}
+
+/// An interactive decision is recorded by apply and reused by the next plan: the adjudicated entry is
+/// not written in this run, and the next round reports it as an accepted home modification.
+#[test]
+fn recorded_decisions_are_reused_by_the_next_plan() {
+    let directory = fixture();
+    let original = record("decided", "Original body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let first = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &first, "first.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, _) = native(&text);
+    metadata["title"] = json!("我的版本");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\nMy own body.\n",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let mut updated = record("decided", "Satellite body.\n");
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let engine = okf_engine(&directory, vec![updated.clone()]);
+    let open = plan(&engine, &directory, Some(&previous));
+    let cluster_id = open.conflict_clusters[0].cluster_id.clone();
+    let home_basis = format!("home:memories/{}", original.canonical_id);
+    let before = snapshot(&directory.path().join("target"));
+
+    let decision = Verdict::Keep {
+        cluster_id: cluster_id.clone(),
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec![home_basis]),
+    };
+    let receipt = decide(&engine, &open, std::slice::from_ref(&decision)).unwrap();
+    assert_eq!(receipt.verdicts, vec![decision.clone()]);
+    assert_eq!(
+        snapshot(&directory.path().join("target")),
+        before,
+        "recording a decision must not write the conflicted entry"
+    );
+    assert!(receipt.entries.iter().all(|entry| matches!(
+        entry.disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        } | Disposition::Unresolved {
+            reason: UnresolvedReason::Conflict { .. }
+        }
+    )));
+
+    let decided = history(&directory, &receipt, "decided.json");
+    let resolved = plan(&engine, &directory, Some(&decided));
+    assert_eq!(
+        resolved.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/body".into(), "/frontmatter/title".into()]
+            }
+        }
+    );
+    let advanced = resolved.entries[0].prior_write.as_ref().unwrap();
+    assert_eq!(advanced.content_hash, updated.content_hash);
+    assert_eq!(
+        advanced.target_hash,
+        content_hash(&fs::read(&path).unwrap())
+    );
+
+    // Changing the decision for the same cluster replaces the recorded verdict instead of accumulating
+    // contradictory ones, so the receipt always states one choice per cluster (DEC-6/18).
+    let mut revised = receipt.clone();
+    revised.verdicts = vec![decision.clone()];
+    let revised_path = history(&directory, &revised, "revised.json");
+    let switched = Verdict::Keep {
+        cluster_id: cluster_id.clone(),
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec!["satellite:direct".into()]),
+    };
+    let replayed = plan(&engine, &directory, Some(&revised_path));
+    let replaced = decide(&engine, &replayed, std::slice::from_ref(&switched)).unwrap();
+    assert_eq!(replaced.verdicts, vec![switched]);
 }
 
 /// An internally inconsistent managed identity lets unrelated planning continue but refuses writes.

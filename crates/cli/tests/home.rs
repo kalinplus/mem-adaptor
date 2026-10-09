@@ -359,7 +359,13 @@ fn a_source_moved_between_plan_and_apply_is_refused_and_never_touches_the_regist
     // depth for the identity check itself.
     fs::rename(&source, root.path().join("moved")).unwrap();
     let apply = cli(&["apply", report.to_str().unwrap(), "--yes"]);
-    assert!(!apply.status.success());
+    // The approved basis is gone, which is the stale-basis class rather than an ordinary input error.
+    assert_eq!(
+        common::exit_code(&apply),
+        common::EXIT_BASIS,
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
     let stderr = String::from_utf8_lossy(&apply.stderr);
     assert!(stderr.contains("[S7]"), "{stderr}");
     assert!(stderr.contains("Cannot open source"), "{stderr}");
@@ -682,8 +688,11 @@ fn a_user_edited_shared_index_is_refused_and_survives_verbatim() {
         "--to",
         &format!("okf:{}", home.display()),
     ]);
-    assert!(
-        plan.status.success(),
+    // A shared-artifact divergence leaves every would-write entry unresolved, which is exit 3 and not
+    // a failed command: the plan is complete and the target is untouched.
+    assert_eq!(
+        common::exit_code(&plan),
+        common::EXIT_INCOMPLETE,
         "{}",
         String::from_utf8_lossy(&plan.stderr)
     );
@@ -700,8 +709,11 @@ fn a_user_edited_shared_index_is_refused_and_survives_verbatim() {
         serde_json::to_string(&report["entries"]).unwrap()
     );
     let apply = cli(&["apply", path.to_str().unwrap(), "--yes"]);
-    assert!(
-        apply.status.success(),
+    // The unresolved entries stay unwritten and are carried into the receipt, so the run completes
+    // with exit 3 instead of claiming a complete migration.
+    assert_eq!(
+        common::exit_code(&apply),
+        common::EXIT_INCOMPLETE,
         "{}",
         String::from_utf8_lossy(&apply.stderr)
     );
@@ -714,6 +726,140 @@ fn a_user_edited_shared_index_is_refused_and_survives_verbatim() {
         assert_eq!(after.get(path), Some(bytes), "unchanged: {path}");
     }
     assert_eq!(fs::read_to_string(&index).unwrap(), edited);
+}
+
+/// M6 end to end (issue #35): one home lifecycle where each four-rule outcome is produced by the real CLI.
+/// init → satellite plan → apply → no change → satellite edit → home edit → both edited (conflict), with the
+/// documented exit code asserted at every step so a silently changed disposition cannot pass.
+#[test]
+fn home_lifecycle_produces_each_four_rule_outcome_once() {
+    let root = TempDir::new().unwrap();
+    let (home, source, _satellite) = lifecycle(root.path(), "Vault");
+    let target = format!("okf:{}", home.display());
+
+    // Rule 1: nothing changed on either side.
+    let unchanged = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        root.path().join("unchanged.json").to_str().unwrap(),
+    ]);
+    assert_eq!(
+        common::exit_code(&unchanged),
+        common::EXIT_OK,
+        "{}",
+        String::from_utf8_lossy(&unchanged.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&fs::read(root.path().join("unchanged.json")).unwrap()).unwrap();
+    assert!(
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["disposition"]["reason"]["code"] == "already_migrated"),
+        "{}",
+        serde_json::to_string(&report["entries"]).unwrap()
+    );
+
+    // Rule 2: only the satellite changed, so an update is planned and applied.
+    fs::write(source.join("note-0.md"), "# Note 0\n\n卫星侧更新后的正文").unwrap();
+    let update = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        root.path().join("update.json").to_str().unwrap(),
+    ]);
+    assert_eq!(common::exit_code(&update), common::EXIT_OK);
+    let update_report: Value =
+        serde_json::from_slice(&fs::read(root.path().join("update.json")).unwrap()).unwrap();
+    let changed = update_report["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source_record_id"] == "note-0.md")
+        .unwrap();
+    assert_eq!(changed["disposition"]["status"], "accepted");
+    assert_eq!(
+        common::exit_code(&cli(&[
+            "apply",
+            root.path().join("update.json").to_str().unwrap(),
+            "--yes"
+        ])),
+        common::EXIT_OK
+    );
+
+    // Rule 3: only the home changed, which is an omission and therefore not a failure.
+    let edited = home.join(format!(
+        "memories/{}.md",
+        changed["canonical_id"].as_str().unwrap()
+    ));
+    let text = fs::read_to_string(&edited).unwrap();
+    fs::write(&edited, text.replacen("# Note 0", "# 家里的标题", 1)).unwrap();
+    let home_only = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        root.path().join("home_only.json").to_str().unwrap(),
+    ]);
+    assert_eq!(common::exit_code(&home_only), common::EXIT_OK);
+    let home_only_report: Value =
+        serde_json::from_slice(&fs::read(root.path().join("home_only.json")).unwrap()).unwrap();
+    let omitted = home_only_report["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["canonical_id"] == changed["canonical_id"])
+        .unwrap();
+    assert_eq!(omitted["disposition"]["reason"]["code"], "home_modified");
+
+    // Rule 4: both sides changed differently, so the entry is a conflict and the run is not a success.
+    fs::write(source.join("note-0.md"), "# Note 0\n\n卫星侧又一次更新").unwrap();
+    let conflict = cli(&[
+        "plan",
+        source.to_str().unwrap(),
+        "--to",
+        &target,
+        "--report",
+        root.path().join("conflict.json").to_str().unwrap(),
+    ]);
+    assert_eq!(common::exit_code(&conflict), common::EXIT_INCOMPLETE);
+    let conflict_report: Value =
+        serde_json::from_slice(&fs::read(root.path().join("conflict.json")).unwrap()).unwrap();
+    let entry = conflict_report["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["canonical_id"] == changed["canonical_id"])
+        .unwrap();
+    assert_eq!(entry["disposition"]["reason"]["code"], "conflict");
+    assert_eq!(
+        conflict_report["conflict_clusters"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        String::from_utf8_lossy(&conflict.stdout).contains("Conflict cluster"),
+        "{}",
+        String::from_utf8_lossy(&conflict.stdout)
+    );
+    // A non-interactive apply leaves the conflict unwritten and reports the same class.
+    let before = fs::read(&edited).unwrap();
+    let applied = cli(&[
+        "apply",
+        root.path().join("conflict.json").to_str().unwrap(),
+        "--yes",
+    ]);
+    assert_eq!(common::exit_code(&applied), common::EXIT_INCOMPLETE);
+    assert_eq!(fs::read(&edited).unwrap(), before);
 }
 
 /// Checks #33: when the shared-basis receipt becomes unreadable after planning, apply refuses before any

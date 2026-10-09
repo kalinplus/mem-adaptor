@@ -1756,6 +1756,8 @@ fn private_output(output: &Output, secret: &str) {
 
 /// Requires an ordinary CLI refusal with an attributable cause, never merely a nonzero status.
 fn cli_failure(output: &Output, cause: &str, secret: &str) -> String {
+    // The refusal class is asserted at each call site that knows which basis drifted; this helper only
+    // guarantees "not a success, not a crash, and named cause".
     assert!(!output.status.success(), "CLI unexpectedly succeeded");
     private_output(output, secret);
     let message = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -1787,7 +1789,16 @@ fn cli_pass_and_block_preserve_privacy_and_actual_native_policy_semantics() {
         let before = snapshot(&root.join("target"));
         let planned = cli_plan(&directory, "plan.json", &["--secret-policy", mode]);
         private_output(&planned, &secret);
-        assert!(planned.status.success(), "CLI plan failed");
+        assert_eq!(
+            common::exit_code(&planned),
+            if mode == "block" {
+                common::EXIT_INCOMPLETE
+            } else {
+                common::EXIT_OK
+            },
+            "CLI plan stderr: {}",
+            String::from_utf8_lossy(&planned.stderr)
+        );
         assert!(
             snapshot(&root.join("target")) == before,
             "Planning changed target bytes"
@@ -1808,7 +1819,16 @@ fn cli_pass_and_block_preserve_privacy_and_actual_native_policy_semantics() {
         );
         let output = cli(&["apply", root.join("plan.json").to_str().unwrap(), "--yes"]);
         private_output(&output, &secret);
-        assert!(output.status.success(), "CLI apply failed");
+        assert_eq!(
+            common::exit_code(&output),
+            if mode == "block" {
+                common::EXIT_INCOMPLETE
+            } else {
+                common::EXIT_OK
+            },
+            "CLI apply stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         for name in ["plan.json", "plan.approval.json", "plan.receipt.json"] {
             assert!(
                 !String::from_utf8_lossy(&fs::read(root.join(name)).unwrap()).contains(&secret),
@@ -1993,6 +2013,12 @@ fn cli_approved_ump_ancestor_swap_keeps_both_target_trees_unchanged() {
     fs::rename(&parent, &moved).unwrap();
     std::os::unix::fs::symlink(&outside, &parent).unwrap();
     let output = cli(&["apply", root.join("plan.json").to_str().unwrap(), "--yes"]);
+    assert_eq!(
+        common::exit_code(&output),
+        common::EXIT_BASIS,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let message = cli_failure(
         &output,
         "[S7] Approved target path changed",

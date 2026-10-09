@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 use anyhow::{Context, ensure};
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::{CanonicalRecord, Scope};
-use mem_adaptor_core::engine::{canonical_id, content_hash, record_hash, timestamp};
+use mem_adaptor_core::engine::{BasisMismatch, canonical_id, content_hash, record_hash, timestamp};
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
 use mem_adaptor_core::writer as target;
@@ -378,20 +378,29 @@ impl Writer for UmpWriter {
                     prior.target_id == planned.target_id,
                     "UMP update identity mismatch"
                 );
-                let position = position.context("UMP target was deleted after approval")?;
-                ensure!(
-                    records.records[position].target_hash()? == prior.target_hash,
-                    "UMP target payload changed after approval"
-                );
-                ensure!(
-                    record_hash(
-                        records.records[position]
-                            .record
-                            .as_ref()
-                            .context("UMP update target lacks migration metadata")?
-                    )? == prior.record_hash,
-                    "UMP target metadata changed after approval"
-                );
+                // A target that moved after approval is an execution-basis mismatch, matching the OKF
+                // Writer's classification so the exit code never depends on the target format.
+                let Some(position) = position else {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "UMP target was deleted after approval",
+                    )));
+                };
+                if records.records[position].target_hash()? != prior.target_hash {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "UMP target payload changed after approval",
+                    )));
+                }
+                if record_hash(
+                    records.records[position]
+                        .record
+                        .as_ref()
+                        .context("UMP update target lacks migration metadata")?,
+                )? != prior.record_hash
+                {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "UMP target metadata changed after approval",
+                    )));
+                }
                 Some(
                     records.records[position].value["time"]["created"]
                         .as_str()

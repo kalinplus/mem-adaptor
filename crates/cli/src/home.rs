@@ -233,11 +233,16 @@ pub fn validate_plan_satellite(
         return Ok(());
     }
     let detection = satellite::detect_source(&registry.readers, source)?;
-    ensure!(
-        satellite::derive_id(&detection.canonical_path.to_string_lossy()) == spec.id,
-        "Plan satellite {} is neither registered in this home nor derivable from the plan's source path, so the registry could not converge after writing. Plan again from this home",
-        spec.id
-    );
+    // Only the binding mismatch is a stale approved basis; a source that cannot be read stays an
+    // ordinary input/IO failure, exactly as it would in direct migration.
+    if satellite::derive_id(&detection.canonical_path.to_string_lossy()) != spec.id {
+        return Err(anyhow::Error::new(
+            mem_adaptor_core::engine::BasisMismatch::new(format!(
+                "Plan satellite {} is neither registered in this home nor derivable from the plan's source path, so the registry could not converge after writing. Plan again from this home",
+                spec.id
+            )),
+        ));
+    }
     Ok(())
 }
 
