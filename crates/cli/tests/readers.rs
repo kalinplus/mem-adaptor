@@ -1044,12 +1044,11 @@ fn all_readers_are_available_from_cli_and_reports_have_no_raw_metadata_values() 
             .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
         let bytes = fs::read(report_path).unwrap();
+        let plan: Value = serde_json::from_slice(&bytes).unwrap();
+        // The chatgpt fixture carries a disabled memory, so this run is a complete plan with one entry
+        // that needs a decision; the code must follow the plan's own dispositions.
+        common::assert_plan_exit(&result, &plan);
         for stream in [&bytes, &result.stdout, &result.stderr] {
             assert!(!String::from_utf8_lossy(stream).contains(private));
         }

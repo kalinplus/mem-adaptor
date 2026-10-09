@@ -719,11 +719,10 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
             .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
-        assert!(
-            planned.status.success(),
-            "{}",
-            String::from_utf8_lossy(&planned.stderr)
-        );
+        // Some reader fixtures carry disabled or rejected records, so the code follows the plan's own
+        // dispositions instead of assuming a complete success.
+        let plan_report: Value = serde_json::from_slice(&fs::read(&plan).unwrap()).unwrap();
+        common::assert_plan_exit(&planned, &plan_report);
         assert!(!target.exists());
         let applied = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
             .args([
@@ -736,11 +735,8 @@ fn website_fixtures_write_exact_native_sets_and_exclude_disabled_deleted_legacy_
             .env("XDG_CONFIG_HOME", common::config_home())
             .output()
             .unwrap();
-        assert!(
-            applied.status.success(),
-            "{}",
-            String::from_utf8_lossy(&applied.stderr)
-        );
+        // Rejected and unresolved entries stay unwritten, so this apply completes with exit 3.
+        common::assert_apply_exit(&applied, &plan_report);
         let actual = snapshot(&target);
         let mut paths = expected
             .iter()
@@ -827,11 +823,8 @@ fn website_metadata_secret_policies_are_reported_privately_and_enforced_in_nativ
                 command.args(["--allow-rule", "github-pat"]);
             }
             let planned = command.output().unwrap();
-            assert!(
-                planned.status.success(),
-                "{}",
-                String::from_utf8_lossy(&planned.stderr)
-            );
+            let plan_report: Value = serde_json::from_slice(&fs::read(&plan).unwrap()).unwrap();
+            common::assert_plan_exit(&planned, &plan_report);
             let applied = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
                 .args([
                     "apply",
@@ -843,8 +836,19 @@ fn website_metadata_secret_policies_are_reported_privately_and_enforced_in_nativ
                 .env("XDG_CONFIG_HOME", common::config_home())
                 .output()
                 .unwrap();
-            assert!(
-                applied.status.success(),
+            // A blocked record is rejected and left unwritten, so this apply completes with exit 3.
+            assert_eq!(
+                common::exit_code(&applied),
+                if plan_report["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["disposition"]["status"] == "rejected")
+                {
+                    common::EXIT_INCOMPLETE
+                } else {
+                    common::EXIT_OK
+                },
                 "{}",
                 String::from_utf8_lossy(&applied.stderr)
             );

@@ -11,10 +11,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use mem_adaptor_core::engine::{Engine, SCHEMA_VERSION, timestamp, write_json_new};
+use mem_adaptor_core::canonical::Verdict;
+use mem_adaptor_core::engine::{BasisMismatch, Engine, SCHEMA_VERSION, timestamp, write_json_new};
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::plugins::Registry;
-use mem_adaptor_core::reports::{PlanReport, SatelliteSpec};
+use mem_adaptor_core::reports::{
+    Disposition, PlanReport, SatelliteSpec, UnresolvedReason, Verification,
+};
 use mem_adaptor_core::satellite::RelocationCandidate;
 use mem_adaptor_reader_chatgpt::ChatgptReader;
 use mem_adaptor_reader_claude::ClaudeReader;
@@ -81,21 +84,239 @@ enum Command {
     },
 }
 
-/// Presents masked ordinary errors and a nonzero exit; it does not recover or roll back target writes.
+/// Presents masked ordinary errors and the documented exit code for the failure class; it does not
+/// recover or roll back target writes.
 fn main() {
-    if let Err(error) = run() {
-        eprintln!(
-            "Error: {}",
-            mem_adaptor_core::gate::mask(&format!("{error:#}"))
-        );
-        std::process::exit(1);
+    match run() {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!(
+                "Error: {}",
+                mem_adaptor_core::gate::mask(&format!("{error:#}"))
+            );
+            std::process::exit(exit_code_for_error(&error));
+        }
     }
+}
+
+/// Maps a failure to its documented exit code without matching error text: a stale approved execution
+/// basis is its own class, and everything else that reaches this point is an input, schema or I/O
+/// failure (usage errors are handled by the argument parser before this runs).
+fn exit_code_for_error(error: &anyhow::Error) -> i32 {
+    if error.downcast_ref::<BasisMismatch>().is_some() {
+        4
+    } else {
+        1
+    }
+}
+
+/// Counts the three ways a run is not a complete success: rejected by policy, unresolved (including
+/// open conflicts and unmanaged targets), and verifications that do not match. Omitted entries
+/// (duplicates, already migrated, home-modified, deleted in target) are not failures.
+fn failure_counts<'a>(
+    dispositions: impl Iterator<Item = &'a Disposition>,
+    verifications: impl Iterator<Item = Option<&'a Verification>>,
+) -> (usize, usize, usize) {
+    let mut rejected = 0;
+    let mut unresolved = 0;
+    for disposition in dispositions {
+        match disposition {
+            Disposition::Rejected { .. } => rejected += 1,
+            Disposition::Unresolved { .. } => unresolved += 1,
+            _ => {}
+        }
+    }
+    let unverified = verifications
+        .filter(|verification| matches!(verification, Some(Verification::Mismatch { .. })))
+        .count();
+    (rejected, unresolved, unverified)
+}
+
+/// Exit 0 only when nothing needs a human decision; otherwise 3, the class for a run that finished
+/// without errors but did not complete the migration.
+fn exit_code_for(failures: (usize, usize, usize)) -> i32 {
+    if failures == (0, 0, 0) { 0 } else { 3 }
+}
+
+/// Reports why a run did not exit 0, what that means for the target, and what to do next.
+/// `may_have_written` distinguishes an apply (which may already have written some entries) from a plan,
+/// so the message never claims a target changed when the command could not have changed it.
+fn print_exit_explanation(failures: (usize, usize, usize), may_have_written: bool) {
+    let (rejected, unresolved, unverified) = failures;
+    if failures == (0, 0, 0) {
+        println!("Exit 0: nothing outstanding; omitted entries are not failures.");
+        return;
+    }
+    let target = if may_have_written {
+        "Rejected and unresolved entries were not written; the target may be partially updated."
+    } else {
+        "This plan wrote no target bytes."
+    };
+    println!(
+        "Exit 3: {rejected} rejected, {unresolved} unresolved, {unverified} unverified entries.\n\
+         {target}\n\
+         A conflict needs a verdict, a target_unmanaged or target_modified entry needs your decision in the home,\n\
+         a policy rejection needs a rule change, and an unverified entry needs its target inspected before retrying;\n\
+         re-plan after acting so the new plan and approval cover the decision."
+    );
+}
+
+/// Prints the plan summary and every entry a human still has to act on, without exposing source values.
+fn print_plan_detail(report: &PlanReport) {
+    let count = |wanted: fn(&Disposition) -> bool| {
+        report
+            .entries
+            .iter()
+            .filter(|entry| wanted(&entry.disposition))
+            .count()
+    };
+    println!(
+        "Plan summary: {} records - {} to write, {} omitted, {} rejected, {} unresolved.",
+        report.entries.len(),
+        count(|disposition| matches!(
+            disposition,
+            Disposition::Accepted | Disposition::Transformed { .. }
+        )),
+        count(|disposition| matches!(disposition, Disposition::Omitted { .. })),
+        count(|disposition| matches!(disposition, Disposition::Rejected { .. })),
+        count(|disposition| matches!(disposition, Disposition::Unresolved { .. })),
+    );
+    let unresolved: Vec<_> = report
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.disposition, Disposition::Unresolved { .. }))
+        .collect();
+    if !unresolved.is_empty() {
+        println!("Unresolved:");
+    }
+    for entry in unresolved {
+        let reason = match &entry.disposition {
+            Disposition::Unresolved {
+                reason: UnresolvedReason::Conflict { cluster_id },
+            } => format!("conflict {cluster_id}"),
+            Disposition::Unresolved {
+                reason: UnresolvedReason::TargetUntracked,
+            } => "target entry exists without recorded history".into(),
+            Disposition::Unresolved {
+                reason: UnresolvedReason::TargetModified,
+            } => "target entry changed outside this tool".into(),
+            Disposition::Unresolved {
+                reason: UnresolvedReason::TargetUnmanaged,
+            } => "target entry left management (its envelope is gone)".into(),
+            Disposition::Unresolved { reason } => format!("{reason:?}"),
+            _ => unreachable!("filtered to unresolved entries"),
+        };
+        println!(
+            "  {} ({}) in {}: {reason}",
+            entry.canonical_id, entry.source_locator, entry.target
+        );
+    }
+    for cluster in &report.conflict_clusters {
+        println!("Conflict cluster {}:", cluster.cluster_id);
+        for candidate in &cluster.candidates {
+            let origin = match &candidate.origin {
+                mem_adaptor_core::canonical::CandidateOrigin::Satellite { id, label } => {
+                    format!("satellite {id} ({})", label.clone().unwrap_or_default())
+                }
+                mem_adaptor_core::canonical::CandidateOrigin::Home { path } => {
+                    format!("home {path}")
+                }
+            };
+            println!(
+                "  {} [{}] {} content_hash={} record_hash={}",
+                candidate.canonical_id,
+                candidate.basis,
+                origin,
+                candidate.content_hash,
+                candidate.record_hash
+            );
+        }
+    }
+    let rejected: Vec<_> = report
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.disposition, Disposition::Rejected { .. }))
+        .collect();
+    if !rejected.is_empty() {
+        println!("Rejected by policy:");
+    }
+    for entry in rejected {
+        let Disposition::Rejected { rule } = &entry.disposition else {
+            unreachable!("filtered to rejected entries")
+        };
+        println!(
+            "  {} ({}) in {}: {rule}",
+            entry.canonical_id, entry.source_locator, entry.target
+        );
+    }
+}
+
+/// Reports whether this run may ask the user anything: only an attached terminal without `--yes` can.
+/// Keeping this decision in one place means a non-interactive run can never block on, or silently
+/// answer, a prompt, and it is the single condition the CLI uses for both prompts.
+fn interactive(yes: bool, terminal: bool) -> bool {
+    !yes && terminal
+}
+
+/// Asks one decision per open four-rule conflict cluster, whose two candidates describe the same record.
+/// Any other cluster shape, an unknown answer or end of input leaves the cluster unresolved, so the run
+/// never invents a verdict; recorded choices persist in the receipt and are reused next run (DEC-6/18).
+fn collect_decisions(
+    clusters: &[mem_adaptor_core::reports::ConflictCluster],
+    ask: &mut dyn FnMut(&str) -> Result<Option<String>>,
+) -> Result<Vec<Verdict>> {
+    let mut decisions = Vec::new();
+    for cluster in clusters {
+        let Some(canonical_id) = cluster
+            .candidates
+            .first()
+            .map(|candidate| candidate.canonical_id.clone())
+        else {
+            continue;
+        };
+        let same_record = cluster
+            .candidates
+            .iter()
+            .all(|candidate| candidate.canonical_id == canonical_id);
+        let bases: Vec<_> = cluster
+            .candidates
+            .iter()
+            .map(|candidate| candidate.basis.clone())
+            .collect();
+        if !same_record || bases.len() != 2 {
+            println!(
+                "Cluster {}: {} candidates for one record; this run records no decision for it.",
+                cluster.cluster_id,
+                bases.len()
+            );
+            continue;
+        }
+        let prompt = format!(
+            "Cluster {} for {}: [1] keep {} [2] keep {} [3] leave unresolved: ",
+            cluster.cluster_id, canonical_id, bases[0], bases[1]
+        );
+        let answer = ask(&prompt)?;
+        match answer.as_deref().map(str::trim) {
+            Some("1") => decisions.push(Verdict::Keep {
+                cluster_id: cluster.cluster_id.clone(),
+                canonical_ids: vec![canonical_id],
+                bases: Some(vec![bases[0].clone()]),
+            }),
+            Some("2") => decisions.push(Verdict::Keep {
+                cluster_id: cluster.cluster_id.clone(),
+                canonical_ids: vec![canonical_id],
+                bases: Some(vec![bases[1].clone()]),
+            }),
+            _ => println!("Cluster {} left unresolved.", cluster.cluster_id),
+        }
+    }
+    Ok(decisions)
 }
 
 /// Validates CLI paths/options and orchestrates init, plan, or explicitly approved apply.
 /// Saves approval before engine recomputation and the receipt after engine completion; any error propagates.
 /// A saved approval is not a success receipt, and a later receipt-save error does not imply an unchanged target.
-fn run() -> Result<()> {
+fn run() -> Result<i32> {
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -134,6 +355,7 @@ fn run() -> Result<()> {
                     mem_adaptor_core::satellite::home_config_path(&directory).display()
                 );
             }
+            Ok(0)
         }
         Command::Plan {
             source,
@@ -328,6 +550,13 @@ fn run() -> Result<()> {
                 println!("WARNING: {warning}");
             }
             println!("WARNING: synthetic inputs only; real-data conformance is pending.");
+            print_plan_detail(&report);
+            let failures = failure_counts(
+                report.entries.iter().map(|entry| &entry.disposition),
+                report.entries.iter().map(|_| None),
+            );
+            print_exit_explanation(failures, false);
+            Ok(exit_code_for(failures))
         }
         Command::Apply { plan, receipt, yes } => {
             let plan_path = normalize_path(&plan)?;
@@ -359,13 +588,18 @@ fn run() -> Result<()> {
             let engine = engine(&targets).context(
                 "[S7] Target setup failed before target writes and before approval was saved; this execution has not written targets. Inspect target paths and make a new plan",
             )?;
-            ensure!(
-                report.targets.iter().all(|target| engine
+            // The plan's targets, home nature and satellite binding are all part of the approved execution
+            // basis, so a drift here is the same class as the engine's own basis checks (exit 4).
+            if !report.targets.iter().all(|target| {
+                engine
                     .registry
                     .writer(&target.id)
-                    .is_ok_and(|writer| writer.location().to_string_lossy() == target.location)),
-                "[S7] Approved target path changed before target writes and before approval was saved; inspect target paths and make a new plan"
-            );
+                    .is_ok_and(|writer| writer.location().to_string_lossy() == target.location)
+            }) {
+                return Err(anyhow::Error::new(BasisMismatch::new(
+                    "[S7] Approved target path changed before target writes and before approval was saved; inspect target paths and make a new plan",
+                )));
+            }
             let spec = report.source.satellite.clone();
             let mut home = report
                 .targets
@@ -373,21 +607,27 @@ fn run() -> Result<()> {
                 .find_map(|target| crate::home::detect(&target.writer, Path::new(&target.location)))
                 .map(|directory| crate::home::load(&directory))
                 .transpose()?;
-            ensure!(
-                home.is_none() || spec.is_some(),
-                "[S7] This plan carries no satellite identity but its target is now a home; home mode requires a satellite. Plan again against that home"
-            );
-            ensure!(
-                home.is_some()
-                    || spec.is_none()
-                    || !report.targets.iter().any(|target| target.writer == "okf"),
-                "[S7] This plan carries a satellite identity but its okf target has no .mem-adaptor/config.toml; the home this plan was made against is missing. Restore the home configuration or plan again; applying it as a direct migration would strand this round's receipt outside the satellite's chain"
-            );
+            if !(home.is_none() || spec.is_some()) {
+                return Err(anyhow::Error::new(BasisMismatch::new(
+                    "[S7] This plan carries no satellite identity but its target is now a home; home mode requires a satellite. Plan again against that home",
+                )));
+            }
+            if !(home.is_some()
+                || spec.is_none()
+                || !report.targets.iter().any(|target| target.writer == "okf"))
+            {
+                return Err(anyhow::Error::new(BasisMismatch::new(
+                    "[S7] This plan carries a satellite identity but its okf target has no .mem-adaptor/config.toml; the home this plan was made against is missing. Restore the home configuration or plan again; applying it as a direct migration would strand this round's receipt outside the satellite's chain",
+                )));
+            }
             if let (Some(home), Some(spec)) = (&home, &spec) {
+                // A registry binding that no longer matches the approved plan is also a stale basis.
                 crate::home::validate_plan_satellite(home, &engine.registry, spec, Path::new(&report.source.location))
-                    .context(
-                        "[S7] Plan satellite validation failed before target writes and before approval was saved; this execution has not written targets. Inspect the home registry and the plan's source before proceeding",
-                    )?;
+                    .map_err(|error| {
+                        anyhow::Error::new(BasisMismatch::new(format!(
+                            "[S7] Plan satellite validation failed before target writes and before approval was saved; this execution has not written targets. Inspect the home registry and the plan's source before proceeding: {error:#}"
+                        )))
+                    })?;
             }
             // Home mode files the receipt in the satellite's chain inside the home (DEC-19) after the engine
             // returns it; an explicit --receipt overrides that location and keeps the original path guards.
@@ -433,6 +673,18 @@ fn run() -> Result<()> {
                     io::stdin().is_terminal(),
                     "Noninteractive apply requires explicit --yes"
                 );
+                print_plan_detail(&report);
+            }
+            // Interactive runs settle open conflicts here: the choices are recorded in this run's receipt
+            // and reused next run, and because they change what a later plan proposes, the write step for
+            // those entries still requires a new plan and a new approval (DEC-3, DEC-21 C).
+            let decisions = if interactive(yes, io::stdin().is_terminal()) {
+                let mut ask = read_answer;
+                collect_decisions(&report.conflict_clusters, &mut ask)?
+            } else {
+                Vec::new()
+            };
+            if interactive(yes, io::stdin().is_terminal()) {
                 print!(
                     "Approve {} records for writing? [y/N] ",
                     report.entries.len()
@@ -457,11 +709,12 @@ fn run() -> Result<()> {
             write_json_new(&approval_path, &approval).context(
                 "[S7] Approval save failed before target writes; targets unchanged, approval may be incomplete. Inspect the report path and create a new plan before proceeding; do not overwrite existing artifacts",
             )?;
-            let receipt = engine.apply(
+            let receipt = engine.apply_with_decisions(
                 &report,
                 &approval,
                 plan_path.to_string_lossy().into_owned(),
                 approval_path.to_string_lossy().into_owned(),
+                &decisions,
             ).context("Apply failed; approval was saved but no reliable final receipt was saved. Follow the failed engine stage and inspect the target state before proceeding; do not blindly retry")?;
             // Engine execution is complete; registry convergence and receipt persistence can still fail after
             // target writes, so each step reports that the target may already have changed.
@@ -494,6 +747,12 @@ fn run() -> Result<()> {
                 }
             }
             println!("Receipt: {} records.", receipt.entries.len());
+            if !decisions.is_empty() {
+                println!(
+                    "{} cluster decisions were recorded in this receipt; they change what the next plan proposes, so re-run plan and apply to write the decided values.",
+                    decisions.len()
+                );
+            }
             print_gate_summary(
                 &receipt.gate_policy,
                 receipt
@@ -501,9 +760,17 @@ fn run() -> Result<()> {
                     .iter()
                     .flat_map(|entry| entry.sensitive_findings.iter()),
             );
+            let failures = failure_counts(
+                receipt.entries.iter().map(|entry| &entry.disposition),
+                receipt
+                    .entries
+                    .iter()
+                    .map(|entry| entry.verification.as_ref()),
+            );
+            print_exit_explanation(failures, true);
+            Ok(exit_code_for(failures))
         }
     }
-    Ok(())
 }
 
 /// Builds a direct-mode satellite identity from explicit flags. Direct mode has no registry, so it can neither
@@ -609,4 +876,165 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
         normalized.push(component);
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mem_adaptor_core::reports::{ConflictCluster, OmissionReason};
+
+    /// A stale approved basis is its own exit class, even when the caller adds context around it.
+    #[test]
+    fn basis_mismatch_errors_map_to_exit_four() {
+        let mismatched = anyhow::Error::new(BasisMismatch::new("Plan digest mismatch"))
+            .context("Apply failed; approval was saved");
+        assert_eq!(exit_code_for_error(&mismatched), 4);
+        assert_eq!(
+            exit_code_for_error(&anyhow::anyhow!("Input is unreadable")),
+            1
+        );
+    }
+
+    /// Only an attached terminal without `--yes` may prompt; every other combination must stay silent,
+    /// which is what keeps a piped or approved run from blocking or inventing a decision.
+    #[test]
+    fn only_an_attached_terminal_without_approval_prompts() {
+        assert!(interactive(false, true));
+        assert!(!interactive(true, true));
+        assert!(!interactive(false, false));
+        assert!(!interactive(true, false));
+    }
+
+    /// Rejected, unresolved and unverified entries are the only ways a run is incomplete; every omitted
+    /// reason, including the home-edit ones, stays a complete success.
+    #[test]
+    fn only_open_entries_change_the_exit_class() {
+        let omitted = [
+            Disposition::Omitted {
+                reason: OmissionReason::HomeModified {
+                    home_changed_fields: vec!["/body".into()],
+                },
+            },
+            Disposition::Omitted {
+                reason: OmissionReason::TargetUnsupported {
+                    field: "/embedding/vector".into(),
+                },
+            },
+            Disposition::Omitted {
+                reason: OmissionReason::SecretReferenceUnsupported,
+            },
+        ];
+        let accepted = [Disposition::Accepted];
+        for disposition in &omitted {
+            assert_eq!(
+                exit_code_for(failure_counts(
+                    [disposition].into_iter(),
+                    [None].into_iter()
+                )),
+                0,
+                "{disposition:?} must not fail a run"
+            );
+        }
+        assert_eq!(
+            exit_code_for(failure_counts(accepted.iter(), [None].into_iter())),
+            0
+        );
+        assert_eq!(
+            exit_code_for(failure_counts(
+                [Disposition::Rejected {
+                    rule: "secret".into()
+                }]
+                .iter(),
+                [None].into_iter()
+            )),
+            3
+        );
+        assert_eq!(
+            exit_code_for(failure_counts(
+                [Disposition::Unresolved {
+                    reason: UnresolvedReason::TargetModified
+                }]
+                .iter(),
+                [None].into_iter()
+            )),
+            3
+        );
+        assert_eq!(
+            exit_code_for(failure_counts(
+                [Disposition::Accepted].iter(),
+                [Some(&Verification::Mismatch { diff: vec![] })].into_iter()
+            )),
+            3
+        );
+    }
+
+    /// Builds one two-sided cluster of the shape the engine reports for a four-rule conflict.
+    fn cluster(cluster_id: &str) -> ConflictCluster {
+        serde_json::from_value(serde_json::json!({
+            "cluster_id": cluster_id,
+            "candidates": [
+                {
+                    "canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "basis": "satellite:direct",
+                    "origin": {"kind": "satellite", "id": "direct"},
+                    "content_hash": format!("sha256:{}", "a".repeat(64)),
+                    "record_hash": format!("sha256:{}", "b".repeat(64)),
+                },
+                {
+                    "canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "basis": "home:memories/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "origin": {"kind": "home", "path": "memories/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md"},
+                    "content_hash": format!("sha256:{}", "c".repeat(64)),
+                    "record_hash": format!("sha256:{}", "d".repeat(64)),
+                }
+            ]
+        }))
+        .unwrap()
+    }
+
+    /// A chosen side becomes a keep verdict naming that basis; leaving the cluster alone records nothing.
+    #[test]
+    fn decisions_follow_the_answered_choice() {
+        let clusters = vec![cluster(&format!("sha256:{}", "e".repeat(64)))];
+        for (answer, expected) in [
+            ("1", Some("satellite:direct")),
+            ("2", Some("home:memories/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+            ("3", None),
+            ("", None),
+        ] {
+            let mut ask = |_prompt: &str| Ok(Some(answer.to_string()));
+            let decisions = collect_decisions(&clusters, &mut ask).unwrap();
+            match expected {
+                Some(basis) => assert_eq!(
+                    decisions,
+                    vec![Verdict::Keep {
+                        cluster_id: clusters[0].cluster_id.clone(),
+                        canonical_ids: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
+                        bases: Some(vec![basis.into()]),
+                    }],
+                    "answer {answer:?}"
+                ),
+                None => assert!(decisions.is_empty(), "answer {answer:?}"),
+            }
+        }
+        // End of input is a missing choice, not an empty one, so it never invents a verdict.
+        let mut closed = |_prompt: &str| Ok(None);
+        assert!(
+            collect_decisions(&clusters, &mut closed)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A cluster whose candidates are not one record's two sides is left undecided, never guessed at.
+    #[test]
+    fn unusual_clusters_are_left_undecided() {
+        let mut single = cluster(&format!("sha256:{}", "f".repeat(64)));
+        single.candidates.pop();
+        let mut ask = |_prompt: &str| Ok(Some("1".to_string()));
+        assert!(collect_decisions(&[single], &mut ask).unwrap().is_empty());
+        let mut foreign = cluster(&format!("sha256:{}", "f".repeat(64)));
+        foreign.candidates[1].canonical_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        assert!(collect_decisions(&[foreign], &mut ask).unwrap().is_empty());
+    }
 }

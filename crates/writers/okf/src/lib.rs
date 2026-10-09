@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, ensure};
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::{CanonicalRecord, ReembedPlan};
-use mem_adaptor_core::engine::{WriteToken, record_hash};
+use mem_adaptor_core::engine::{BasisMismatch, WriteToken, record_hash};
 use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
@@ -381,17 +381,25 @@ impl Writer for OkfWriter {
                     prior.target_id == planned.target_id,
                     "Update identity does not match previous write"
                 );
-                let actual = self
-                    .inspect(&prior.target_id)?
-                    .context("Target deleted after approval")?;
-                ensure!(
-                    record_hash(&actual)? == prior.record_hash,
-                    "Target changed after approval"
-                );
-                ensure!(
-                    self.target_hash(&prior.target_id)?.as_ref() == Some(&prior.target_hash),
-                    "Target payload changed after approval"
-                );
+                let actual = self.inspect(&prior.target_id)?;
+                // A target that moved after approval is an execution-basis mismatch, whether it was
+                // deleted or edited, so the exit code stays the same across those two outcomes.
+                let Some(actual) = actual else {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "Target deleted after approval",
+                    )));
+                };
+                // A target that moved after approval is an execution-basis mismatch, not an ordinary failure.
+                if record_hash(&actual)? != prior.record_hash {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "Target changed after approval",
+                    )));
+                }
+                if self.target_hash(&prior.target_id)?.as_ref() != Some(&prior.target_hash) {
+                    return Err(anyhow::Error::new(BasisMismatch::new(
+                        "Target payload changed after approval",
+                    )));
+                }
             } else {
                 ensure!(
                     previous_bytes.is_none(),

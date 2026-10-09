@@ -416,7 +416,18 @@ fn cli_punctuation_secret_policies_match_reports_and_target_bytes() {
             options.extend(["--allow-rule", "openai-api-key"]);
         }
         let planned = plan(&directory, &root.join("source"), "plan.json", &options);
-        assert!(planned.status.success());
+        // A blocked record is an accurately reported disposition, not a failed command, but the run is
+        // not a complete success either: exit 3 keeps "nothing needs a decision" as exit 0.
+        assert_eq!(
+            common::exit_code(&planned),
+            if writes {
+                common::EXIT_OK
+            } else {
+                common::EXIT_INCOMPLETE
+            },
+            "{}",
+            String::from_utf8_lossy(&planned.stderr)
+        );
         assert_eq!(snapshot(&root.join("target")), before);
         let report = document(&directory, "plan.json");
         assert_eq!(
@@ -428,7 +439,16 @@ fn cli_punctuation_secret_policies_match_reports_and_target_bytes() {
             if writes { "accepted" } else { "rejected" }
         );
         let applied = apply(&directory, "plan.json", None);
-        assert!(applied.status.success());
+        assert_eq!(
+            common::exit_code(&applied),
+            if writes {
+                common::EXIT_OK
+            } else {
+                common::EXIT_INCOMPLETE
+            },
+            "{}",
+            String::from_utf8_lossy(&applied.stderr)
+        );
         let receipt = document(&directory, "plan.receipt.json");
         assert_eq!(
             receipt["entries"][0]["sensitive_findings"][0]["disposition"],

@@ -1408,24 +1408,45 @@ impl Engine {
         plan_ref: String,
         approval_ref: String,
     ) -> Result<ReceiptReport> {
+        self.apply_with_decisions(approved, approval, plan_ref, approval_ref, &[])
+    }
+
+    /// Applies an approved plan while recording explicit per-cluster decisions in the receipt (DEC-6/18).
+    /// A decision for an already recorded cluster replaces it; decisions never widen what may be written,
+    /// because every write eligibility still comes from the approved plan and the gate policy.
+    pub fn apply_with_decisions(
+        &self,
+        approved: &PlanReport,
+        approval: &ApprovalReceipt,
+        plan_ref: String,
+        approval_ref: String,
+        decisions: &[Verdict],
+    ) -> Result<ReceiptReport> {
         let mut state = ApplyState {
             phase: "[S7] Approval and execution-basis checks",
             writes_started: false,
         };
-        self.apply_checked(approved, approval, plan_ref, approval_ref, &mut state)
-            .with_context(|| {
-                if state.writes_started {
-                    format!(
-                        "{} failed after target writing began; targets may be partially changed. No reliable final receipt was produced. Inspect all targets and the saved approval before deciding how to proceed; do not blindly retry",
-                        state.phase
-                    )
-                } else {
-                    format!(
-                        "{} failed before target writes began; this execution has not written targets. Check the inputs, target state and approval, then create and approve a new plan",
-                        state.phase
-                    )
-                }
-            })
+        self.apply_checked(
+            approved,
+            approval,
+            plan_ref,
+            approval_ref,
+            decisions,
+            &mut state,
+        )
+        .with_context(|| {
+            if state.writes_started {
+                format!(
+                    "{} failed after target writing began; targets may be partially changed. No reliable final receipt was produced. Inspect all targets and the saved approval before deciding how to proceed; do not blindly retry",
+                    state.phase
+                )
+            } else {
+                format!(
+                    "{} failed before target writes began; this execution has not written targets. Check the inputs, target state and approval, then create and approve a new plan",
+                    state.phase
+                )
+            }
+        })
     }
 
     /// Executes the checked pipeline while updating the boundary used for ordinary failure context.
@@ -1436,6 +1457,7 @@ impl Engine {
         approval: &ApprovalReceipt,
         plan_ref: String,
         approval_ref: String,
+        decisions: &[Verdict],
         state: &mut ApplyState,
     ) -> Result<ReceiptReport> {
         info!("[S7] checking approval and recomputing plan");
@@ -1445,14 +1467,14 @@ impl Engine {
             approval.schema_version == SCHEMA_VERSION,
             "Unsupported approval schema version"
         );
-        ensure!(
+        ensure_basis(
             approval.plan_digest == approved.plan_digest,
-            "Approval digest mismatch"
-        );
-        ensure!(
+            "Approval digest mismatch",
+        )?;
+        ensure_basis(
             plan_digest(&approved.digest_inputs)? == approved.plan_digest,
-            "Plan digest mismatch"
-        );
+            "Plan digest mismatch",
+        )?;
         // Re-read execution inputs and reject a stale approval before invoking any Writer write.
         // The approved satellite identity is part of the execution basis; tampering with it changes
         // derived canonical IDs and fails the entry/digest comparison below.
@@ -1463,22 +1485,22 @@ impl Engine {
             approved.previous_receipt_ref.as_deref().map(Path::new),
             approved.shared_basis_ref.as_deref().map(Path::new),
         )?;
-        ensure!(
+        ensure_basis(
             current.report.plan_digest == approved.plan_digest,
-            "Plan digest mismatch: source or plan changed"
-        );
-        ensure!(
+            "Plan digest mismatch: source or plan changed",
+        )?;
+        ensure_basis(
             current.report.bundle_manifest == approved.bundle_manifest,
-            "Source manifest mismatch: source files changed"
-        );
-        ensure!(
+            "Source manifest mismatch: source files changed",
+        )?;
+        ensure_basis(
             current.report.entries == approved.entries,
-            "Plan entries mismatch"
-        );
-        ensure!(
+            "Plan entries mismatch",
+        )?;
+        ensure_basis(
             current.report.targets == approved.targets,
-            "Target artifacts changed after approval"
-        );
+            "Target artifacts changed after approval",
+        )?;
         let mut token = WriteToken {
             batches: BTreeMap::new(),
             artifacts: BTreeMap::new(),
@@ -1508,15 +1530,15 @@ impl Engine {
                 .iter()
                 .find(|item| item.id == target)
                 .unwrap();
-            ensure!(
+            ensure_basis(
                 writer.artifacts(
                     &batch
                         .iter()
                         .map(|planned| planned.target_id.clone())
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
                 )? == approved_target.artifacts,
-                "Target artifacts changed before write"
-            );
+                "Target artifacts changed before write",
+            )?;
             let writable: Vec<_> = batch
                 .into_iter()
                 .filter(|planned| {
@@ -1780,11 +1802,27 @@ impl Engine {
             plan_ref,
             approval_receipt_ref: approval_ref,
             entries,
-            verdicts: current
-                .previous
-                .as_ref()
-                .map(|previous| previous.verdicts.clone())
-                .unwrap_or_default(),
+            verdicts: {
+                // Recorded decisions carry forward; a new decision for the same cluster replaces the old
+                // one, so a cluster never accumulates contradictory verdicts (DEC-6/18).
+                let mut verdicts = current
+                    .previous
+                    .as_ref()
+                    .map(|previous| previous.verdicts.clone())
+                    .unwrap_or_default();
+                for decision in decisions {
+                    let decided = match decision {
+                        Verdict::Keep { cluster_id, .. }
+                        | Verdict::NeedsMoreContext { cluster_id } => cluster_id,
+                    };
+                    verdicts.retain(|recorded| match recorded {
+                        Verdict::Keep { cluster_id, .. }
+                        | Verdict::NeedsMoreContext { cluster_id } => cluster_id != decided,
+                    });
+                    verdicts.push(decision.clone());
+                }
+                verdicts
+            },
             previous_receipt_ref: approved.previous_receipt_ref.clone(),
         };
         let mut public = serde_json::to_value(&report)?;
@@ -1811,6 +1849,36 @@ fn conflict_cluster_id(
         .chain_update(home_target_hash.as_bytes())
         .finalize();
     Ok(format!("sha256:{}", HEXLOWER.encode(&digest)))
+}
+
+/// Marks the failures that mean the approved execution basis no longer matches what is on disk:
+/// approval, source manifest, plan entries or target artifacts. Callers turn this into one distinct exit
+/// code without matching error text. The message is preserved verbatim for operator-facing output.
+#[derive(Debug)]
+pub struct BasisMismatch(String);
+
+impl BasisMismatch {
+    /// Records why the approved basis no longer matches, for display and for the run's exit code.
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self(detail.into())
+    }
+}
+
+impl std::fmt::Display for BasisMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BasisMismatch {}
+
+/// Rejects a stale approved basis with a classified error instead of an untyped failure.
+fn ensure_basis(condition: bool, message: &str) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(anyhow::Error::new(BasisMismatch::new(message)))
+    }
 }
 
 fn audit_fields(output: &mut ReaderOutput) {
