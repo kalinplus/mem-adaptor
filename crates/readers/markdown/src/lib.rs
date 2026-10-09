@@ -99,7 +99,7 @@ impl MarkdownReader {
             if edits.body_changed {
                 normalize::anomaly(&mut output, &claim.path, "okf_body_changed", "/body", None);
             }
-            let divergence = okf::classify_native(&metadata, &record);
+            let divergence = edits.native;
             if divergence.title {
                 normalize::anomaly(
                     &mut output,

@@ -106,6 +106,12 @@ pub struct TargetState {
     /// Non-fatal damage classification for planning (DEC-21 A/D): `None` means healthy or absent, and
     /// Writers that cannot classify leave it unset so the engine keeps its legacy behaviour.
     pub classification: Option<TargetClassification>,
+    /// Home-file-side pointers of fields edited relative to the envelope evidence (DEC-21 A), filled by
+    /// Writers that attribute home edits; empty for healthy-unattributed states and non-OKF writers.
+    pub home_changed_fields: Vec<String>,
+    /// Record hash the target file's own tool-owned block carries, before any home-side adoption
+    /// (DEC-21 A). The engine compares it with the recorded basis to attribute an envelope edit.
+    pub envelope_hash: Option<String>,
 }
 
 /// Reports why a managed target file is not a healthy managed record (DEC-21 A/D).
@@ -139,6 +145,8 @@ pub trait Writer {
                         record: self.inspect(id)?,
                         target_hash: self.target_hash(id)?,
                         classification: None,
+                        home_changed_fields: Vec::new(),
+                        envelope_hash: None,
                     },
                 ))
             })
@@ -153,6 +161,13 @@ pub trait Writer {
     }
     fn artifacts(&self, target_ids: &[String]) -> Result<Vec<crate::reports::TargetArtifact>>;
     fn shared_artifact_paths(&self) -> &'static [&'static str];
+    /// Renders the exact bytes a write of `planned` would produce, without writing (DEC-21 B rule five:
+    /// convergence needs a byte-identical projection including sticky fields). `None` means this
+    /// Writer cannot project, so the engine keeps its legacy unresolved treatment instead of guessing.
+    fn project(&self, planned: &Planned) -> Result<Option<Vec<u8>>> {
+        let _ = planned;
+        Ok(None)
+    }
 }
 
 #[derive(Default)]

@@ -25,7 +25,13 @@ enum Observation {
     Missing,
     Unmanaged,
     ManagedInvalid,
-    Managed { record: Box<CanonicalRecord> },
+    Managed {
+        record: Box<CanonicalRecord>,
+        /// Home-file-side pointers edited relative to the envelope evidence (DEC-21 A/B).
+        home_changed_fields: Vec<String>,
+        /// Record hash of the file's own tool-owned block before home-side adoption (DEC-21 A).
+        envelope_hash: String,
+    },
 }
 
 impl OkfWriter {
@@ -63,10 +69,63 @@ impl OkfWriter {
         if record.canonical_id != id {
             return Ok(Observation::ManagedInvalid);
         }
-        okf::apply_home_edits(&mut record, &metadata, body);
+        let envelope_hash = mem_adaptor_core::engine::record_hash(&record)?;
+        let edits = okf::apply_home_edits(&mut record, &metadata, body);
         Ok(Observation::Managed {
             record: Box::new(record),
+            home_changed_fields: okf::home_changed_pointers(&edits),
+            envelope_hash,
         })
+    }
+
+    /// Renders the exact bytes a write of `planned` would produce, without writing or checking
+    /// authorization (DEC-21 B/D): sticky advisory fields come from the current file's frontmatter
+    /// and envelope whenever a previous write anchors an update, mirroring `write` byte for byte.
+    fn render(&self, planned: &Planned, previous_bytes: Option<&[u8]>) -> Result<Vec<u8>> {
+        let mut sticky_base: Option<Value> = None;
+        let mut frontmatter = if planned.previous_write.is_some() {
+            let text =
+                std::str::from_utf8(previous_bytes.context("Missing previous target bytes")?)?;
+            let old_metadata =
+                okf::managed_metadata(text)?.context("Missing managed OKF metadata")?;
+            // Sticky base (DEC-21 A): the old envelope's derivation decides whether an advisory
+            // value was user-edited, so restore the old record before overwriting the frontmatter.
+            let (_, old_body) = mem_adaptor_core::reader::markdown_document(text)?;
+            let old_record = okf::restore(&old_metadata, old_body)?;
+            sticky_base = Some(okf::native_projection(&old_record));
+            old_metadata
+        } else {
+            json!({})
+        };
+        let mut metadata = serde_json::to_value(&planned.record)?;
+        metadata.as_object_mut().unwrap().remove("content");
+        let native = okf::native_projection(&planned.record);
+        frontmatter["type"] = native["type"].clone();
+        frontmatter["mem_adaptor_envelope"] = Value::String("okf:0.2".into());
+        // Advisory fields are sticky (DEC-21 A): a value the user changed relative to the old
+        // envelope's derivation survives the update instead of being overwritten by the new
+        // projection. Tags follow the canonical record, whose home value is already the fact.
+        for field in ["title", "sources", "generated"] {
+            let keep_user_value = sticky_base.as_ref().is_some_and(|old| {
+                frontmatter.get(field).is_some() && frontmatter.get(field) != old.get(field)
+            });
+            if keep_user_value {
+                continue;
+            }
+            if let Some(value) = native.get(field) {
+                frontmatter[field] = value.clone();
+            } else {
+                frontmatter.as_object_mut().unwrap().remove(field);
+            }
+        }
+        if let Some(tags) = native.get("tags") {
+            frontmatter["tags"] = tags.clone();
+        } else {
+            frontmatter.as_object_mut().unwrap().remove("tags");
+        }
+        frontmatter["mem_adaptor"] = metadata;
+        let yaml = serde_saphyr::to_string(&frontmatter)?;
+        Ok(format!("---\n{yaml}---\n{}", planned.record.content).into_bytes())
     }
 
     /// Enumerates managed-candidate paths by envelope claim, not by parse success, so target state
@@ -314,13 +373,10 @@ impl Writer for OkfWriter {
         let mut written = Vec::new();
         let mut artifacts = Vec::new();
         for planned in batch {
-            let mut metadata = serde_json::to_value(&planned.record)?;
-            metadata.as_object_mut().unwrap().remove("content");
             let path = format!("{}.md", planned.target_id);
             let previous_bytes = target::read_file(&self.location, &path)?;
             token.authorize_artifact(self, &path, previous_bytes.as_deref())?;
-            let mut sticky_base: Option<Value> = None;
-            let mut frontmatter = if let Some(prior) = &planned.previous_write {
+            if let Some(prior) = &planned.previous_write {
                 ensure!(
                     prior.target_id == planned.target_id,
                     "Update identity does not match previous write"
@@ -336,61 +392,20 @@ impl Writer for OkfWriter {
                     self.target_hash(&prior.target_id)?.as_ref() == Some(&prior.target_hash),
                     "Target payload changed after approval"
                 );
-                let text = std::str::from_utf8(previous_bytes.as_ref().unwrap())?;
-                let old_metadata =
-                    okf::managed_metadata(text)?.context("Missing managed OKF metadata")?;
-                // Sticky base (DEC-21 A): the old envelope's derivation decides whether an advisory
-                // value was user-edited, so restore the old record before overwriting the frontmatter.
-                let (_, old_body) = mem_adaptor_core::reader::markdown_document(text)?;
-                let old_record = okf::restore(&old_metadata, old_body)?;
-                sticky_base = Some(okf::native_projection(&old_record));
-                old_metadata
             } else {
                 ensure!(
                     previous_bytes.is_none(),
                     "Target record already exists without a previous write"
                 );
-                json!({})
-            };
-            let native = okf::native_projection(&planned.record);
-            frontmatter["type"] = native["type"].clone();
-            frontmatter["mem_adaptor_envelope"] = Value::String("okf:0.2".into());
-            // Advisory fields are sticky (DEC-21 A): a value the user changed relative to the old
-            // envelope's derivation survives the update instead of being overwritten by the new
-            // projection. Tags follow the canonical record, whose home value is already the fact.
-            for field in ["title", "sources", "generated"] {
-                let keep_user_value = sticky_base.as_ref().is_some_and(|old| {
-                    frontmatter.get(field).is_some() && frontmatter.get(field) != old.get(field)
-                });
-                if keep_user_value {
-                    continue;
-                }
-                if let Some(value) = native.get(field) {
-                    frontmatter[field] = value.clone();
-                } else {
-                    frontmatter.as_object_mut().unwrap().remove(field);
-                }
             }
-            if let Some(tags) = native.get("tags") {
-                frontmatter["tags"] = tags.clone();
-            } else {
-                frontmatter.as_object_mut().unwrap().remove("tags");
-            }
-            frontmatter["mem_adaptor"] = metadata;
-            let yaml = serde_saphyr::to_string(&frontmatter)?;
-            let text = format!("---\n{yaml}---\n{}", planned.record.content);
-            target::atomic_file(
-                &self.location,
-                &path,
-                text.as_bytes(),
-                previous_bytes.as_deref(),
-            )?;
+            let text = self.render(planned, previous_bytes.as_deref())?;
+            target::atomic_file(&self.location, &path, &text, previous_bytes.as_deref())?;
             written.push(Written {
                 canonical_id: planned.record.canonical_id.clone(),
                 target_id: planned.target_id.clone(),
-                target_hash: mem_adaptor_core::engine::content_hash(text.as_bytes()),
+                target_hash: mem_adaptor_core::engine::content_hash(&text),
             });
-            artifacts.push(target::output_artifact(&path, text.as_bytes()));
+            artifacts.push(target::output_artifact(&path, &text));
             managed.insert(planned.target_id.clone(), planned.record.clone());
         }
         let mut groups = std::collections::BTreeMap::<String, Vec<String>>::new();
@@ -493,7 +508,7 @@ impl Writer for OkfWriter {
     fn inspect(&self, target_id: &str) -> Result<Option<CanonicalRecord>> {
         match self.observe(target_id)? {
             Observation::Missing | Observation::Unmanaged => Ok(None),
-            Observation::Managed { record } => Ok(Some(*record)),
+            Observation::Managed { record, .. } => Ok(Some(*record)),
             Observation::ManagedInvalid => anyhow::bail!(
                 "Managed OKF envelope is invalid: {}",
                 mem_adaptor_core::gate::mask(&format!("{target_id}.md"))
@@ -518,6 +533,8 @@ impl Writer for OkfWriter {
                             record: None,
                             target_hash: None,
                             classification: None,
+                            home_changed_fields: Vec::new(),
+                            envelope_hash: None,
                         },
                         Observation::Unmanaged => TargetState {
                             record: None,
@@ -526,6 +543,8 @@ impl Writer for OkfWriter {
                                     .context("Target vanished during inspection")?,
                             )),
                             classification: Some(TargetClassification::Unmanaged),
+                            home_changed_fields: Vec::new(),
+                            envelope_hash: None,
                         },
                         Observation::ManagedInvalid => TargetState {
                             record: None,
@@ -534,14 +553,22 @@ impl Writer for OkfWriter {
                                     .context("Target vanished during inspection")?,
                             )),
                             classification: Some(TargetClassification::ManagedInvalid),
+                            home_changed_fields: Vec::new(),
+                            envelope_hash: None,
                         },
-                        Observation::Managed { record } => TargetState {
+                        Observation::Managed {
+                            record,
+                            home_changed_fields,
+                            envelope_hash,
+                        } => TargetState {
                             target_hash: Some(mem_adaptor_core::engine::content_hash(
                                 &target::read_file(&self.location, &format!("{id}.md"))?
                                     .context("Target vanished during inspection")?,
                             )),
                             record: Some(*record),
                             classification: None,
+                            home_changed_fields,
+                            envelope_hash: Some(envelope_hash),
                         },
                     },
                 ))
@@ -555,6 +582,18 @@ impl Writer for OkfWriter {
             target::read_file(&self.location, &format!("{target_id}.md"))?
                 .map(|bytes| mem_adaptor_core::engine::content_hash(&bytes)),
         )
+    }
+
+    /// Renders the exact bytes a write of `planned` would currently produce (DEC-21 B rule five),
+    /// so the engine can prove convergence instead of guessing; `None` never happens for OKF except
+    /// when an anchored file disappeared, which planning reports through its own inspection path.
+    fn project(&self, planned: &Planned) -> Result<Option<Vec<u8>>> {
+        let path = format!("{}.md", planned.target_id);
+        let previous_bytes = target::read_file(&self.location, &path)?;
+        if planned.previous_write.is_some() && previous_bytes.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.render(planned, previous_bytes.as_deref())?))
     }
 
     fn artifacts(&self, target_ids: &[String]) -> Result<Vec<TargetArtifact>> {

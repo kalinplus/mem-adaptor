@@ -412,6 +412,7 @@ fn prior_verdict_is_reused_but_does_not_override_secret_blocking() {
     receipt.verdicts = vec![Verdict::Keep {
         cluster_id: cluster.clone(),
         canonical_ids: vec![canonical_id("synthetic", "", "other")],
+        bases: None,
     }];
     let previous = directory.path().join("previous.json");
     write_json_new(&previous, &receipt).unwrap();

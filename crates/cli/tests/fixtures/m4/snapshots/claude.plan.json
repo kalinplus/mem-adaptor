@@ -564,6 +564,7 @@
       "evidence_level": "third_party"
     }
   ],
+  "conflict_clusters": [],
   "source_unavailable": [],
   "anomalies": [
     {
@@ -902,7 +903,8 @@
       "rule_allowlist": [],
       "origin": "default",
       "user_selected": false
-    }
+    },
+    "conflict_clusters": []
   },
-  "plan_digest": "sha256:8df19dd46d8ba05357010b2dbcc9ccb1deb39f79407b6278bb649a12fe04ac7b"
+  "plan_digest": "sha256:7ca0de6a12a44f73999d91483ad91c7de95ced8bdf0c2259d9e983cd7bdcf1be"
 }

@@ -634,7 +634,19 @@ fn source_updates_use_stable_target_ids_and_double_changes_stay_unresolved() {
         .iter()
         .find(|entry| entry["source_record_id"] == "a.md")
         .unwrap();
-    assert_eq!(entry["disposition"]["reason"]["code"], "target_modified");
+    // DEC-21 B rule four: both sides changed differently, so the entry is a conflict candidate in
+    // a reported cluster instead of a bare target modification; nothing is written either way.
+    assert_eq!(entry["disposition"]["reason"]["code"], "conflict");
+    let cluster_id = entry["disposition"]["reason"]["cluster_id"]
+        .as_str()
+        .unwrap();
+    let cluster = conflict["conflict_clusters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|cluster| cluster["cluster_id"] == cluster_id)
+        .unwrap();
+    assert_eq!(cluster["candidates"].as_array().unwrap().len(), 2);
     assert!(apply(&directory, "conflict.json").status.success());
     assert_eq!(snapshot(&directory.path().join("target")), before);
 }

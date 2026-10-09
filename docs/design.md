@@ -730,7 +730,10 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
 
 - 「**卫星变了**」：本轮卫星侧 canonical 记录的 `record_hash` ≠ `prior_write.record_hash`。
 - 「**家变了**」：家文件当前整文件字节哈希 ≠ `prior_write.target_hash`（`target_hash` 已经是整文件字节哈希，
-  `crates/writer-okf/src/lib.rs:418-424`）。字段级定位只用于报告展示，用 A 的归属判据得出。
+  `crates/writer-okf/src/lib.rs:418-424`），或家读回的 canonical 记录 `record_hash` ≠ `prior_write.record_hash`
+  （家已经承载了与基准不同的记录）。字段级定位只用于报告展示，用 A 的归属判据得出；
+  扩展块自身与基准不同时归属为 `/frontmatter/mem_adaptor`，其它无法归属的改动（如新增未知 frontmatter 键）
+  维持 `unresolved target_modified`。
 
 | 卫星 vs 上次写入 | 家 vs 上次写入 | 处置 |
 |---|---|---|
@@ -742,10 +745,13 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
 
 - **比较按记录级，不做字段级合并**：字段级合并就是自动合并（铁律 7 禁止），所以即使双方改动落在不同字段
   （如家改 `tags`、卫星改正文），也进冲突清单由人二选一，不自动拼装。
-- **基准不随跳过推进**：家只变的轮次不发生写入，`prior_write` 不推进。这是有意的——只有批准写入才推进基准，
+- **基准不随跳过推进**：家只变的轮次不发生写入，`prior_write` 不推进。这是有意的——只有批准写入或显式裁决推进基准，
   否则「家先改、卫星后改」会被洗成「只有卫星变」而覆盖用户编辑。
-- **裁决**：每簇两个候选（卫星值 / 家值）。取卫星值 = 批准后写入；取家值 = 回执把家当前状态记为新的
-  `prior_write`（回读验证 `verified`，字节不变）。裁决结果写进回执 `verdicts`，重跑沿用（DEC-6、DEC-18）。
+- **裁决**：每簇两个候选（卫星值 / 家值），用候选自身的 `basis` 选择（`satellite:<id>` / `home:<target_id>`；
+  同时列出两侧视为未裁决）。取卫星值 = 批准后写入；取家值 = 回执把基准确立为「卫星侧 = 当前卫星记录、
+  目标侧 = 家当前字节」（`verified`，字节不变），这样后续轮次读作「卫星没变、家是有意分歧」，
+  持续安静地 `omitted home_modified` 而不是把家值当待覆盖项；家改动无法归属到任何字段指针时不执行取家值，
+  维持 `unresolved`。裁决结果写进回执 `verdicts`，重跑沿用（DEC-6、DEC-18）。
 - **删除语义另议**（§6 Q6）：卫星缺席与家文件删除都不当空正文，`source_missing` 与 `deleted_in_target`
   防复活照旧（§0 增量汇总、DEC-18）。
 - 跨卫星共享产物（`index.md` / `log.md`）的对账按 [m6-cli-proposal.md](m6-cli-proposal.md) §1 已确认的推荐执行，本 DEC 不重复。

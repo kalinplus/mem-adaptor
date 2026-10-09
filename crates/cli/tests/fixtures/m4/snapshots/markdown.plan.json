@@ -207,6 +207,7 @@
       "evidence_level": "measured"
     }
   ],
+  "conflict_clusters": [],
   "source_unavailable": [],
   "anomalies": [],
   "warnings": [
@@ -352,7 +353,8 @@
       "rule_allowlist": [],
       "origin": "default",
       "user_selected": false
-    }
+    },
+    "conflict_clusters": []
   },
-  "plan_digest": "sha256:8a385b3f4fae4326c1dabcfda8e9c907dffea050181a216a32e2d5217cb28bc4"
+  "plan_digest": "sha256:9b2f12a301a9ad4eb1ee378187cd0bc3b1204dcf9443073347290f11adfcb304"
 }

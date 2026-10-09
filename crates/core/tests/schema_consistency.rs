@@ -429,6 +429,11 @@ fn every_disposition_and_verification_variant_matches_schema() {
             reason: OmissionReason::AlreadyMigrated,
         },
         Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/body".into(), "/frontmatter/tags".into()],
+            },
+        },
+        Disposition::Omitted {
             reason: OmissionReason::DeletedInTarget,
         },
         Disposition::Omitted {
@@ -512,6 +517,12 @@ fn every_disposition_and_verification_variant_matches_schema() {
         Verdict::Keep {
             cluster_id: support::HASH.into(),
             canonical_ids: vec![support::ID.into()],
+            bases: None,
+        },
+        Verdict::Keep {
+            cluster_id: support::HASH.into(),
+            canonical_ids: vec![support::ID.into()],
+            bases: Some(vec!["satellite:abcd2345".into()]),
         },
         Verdict::NeedsMoreContext {
             cluster_id: support::HASH.into(),

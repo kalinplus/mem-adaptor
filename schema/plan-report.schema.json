@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "allOf": [{"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/jcs_value"}],
-  "required": ["schema_version", "canonical_model_version", "run_id", "created_at", "source", "source_inventory", "targets", "writers", "model_calls", "gate_policy", "entries", "source_unavailable", "anomalies", "warnings", "bundle_manifest", "digest_inputs", "plan_digest"],
+  "required": ["schema_version", "canonical_model_version", "run_id", "created_at", "source", "source_inventory", "targets", "writers", "model_calls", "gate_policy", "entries", "conflict_clusters", "source_unavailable", "anomalies", "warnings", "bundle_manifest", "digest_inputs", "plan_digest"],
   "properties": {
     "schema_version": {"const": "0.1.0"},
     "canonical_model_version": {"const": "0.1.0"},
@@ -24,6 +24,7 @@
     "model_calls": {"type": "array", "items": {"$ref": "#/$defs/model_call"}},
     "gate_policy": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/gate_policy"},
     "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
+    "conflict_clusters": {"type": "array", "items": {"$ref": "#/$defs/conflict_cluster"}, "description": "Four-rule conflict clusters (DEC-21 B/C): both sides changed differently since the last write."},
     "source_unavailable": {"type": "array", "items": {"$ref": "#/$defs/source_unavailable"}},
     "anomalies": {"type": "array", "items": {"$ref": "#/$defs/anomaly"}},
     "warnings": {"type": "array", "items": {"type": "string"}},
@@ -179,6 +180,13 @@
             "code": {"const": "verdict_excluded"},
             "cluster_id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"}
           }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["code", "home_changed_fields"],
+          "properties": {
+            "code": {"const": "home_modified"},
+            "home_changed_fields": {"type": "array", "minItems": 1, "items": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/pointer"}}
+          }
         }
       ]
     },
@@ -279,9 +287,17 @@
         "duplicate_write": {"$ref": "urn:mem-adaptor:schema:receipt-report:0.1.0#/$defs/duplicate_write"}
       }
     },
-    "digest_inputs": {
-      "type": "object", "additionalProperties": false, "required": ["records", "targets", "writers", "gate_policy"],
+    "conflict_cluster": {
+      "type": "object", "additionalProperties": false, "required": ["cluster_id", "candidates"],
       "properties": {
+        "cluster_id": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash"},
+        "candidates": {"type": "array", "minItems": 1, "items": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/conflict_candidate"}}
+      }
+    },
+    "digest_inputs": {
+      "type": "object", "additionalProperties": false, "required": ["records", "targets", "writers", "gate_policy", "conflict_clusters"],
+      "properties": {
+        "conflict_clusters": {"type": "array", "items": {"$ref": "#/$defs/conflict_cluster"}, "description": "Four-rule conflict clusters behind this digest, binding the observed home hashes (DEC-21 B)."},
         "previous_receipt_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash", "description": "Exact bytes of the complete loaded previous receipt, including carried history."},
         "shared_basis_hash": {"$ref": "urn:mem-adaptor:schema:canonical-record:0.1.0#/$defs/hash", "description": "Exact bytes of the shared-artifact basis receipt this plan reconciled against."},
         "records": {

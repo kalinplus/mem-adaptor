@@ -252,7 +252,27 @@ pub struct ReembedPlan {
 #[serde(deny_unknown_fields)]
 pub struct ConflictCandidate {
     pub canonical_id: String,
+    /// Identifies this candidate inside its cluster so a verdict can select it by basis
+    /// (DEC-21 B): `"satellite:<id>"` for the satellite-side value, `"home:<target_id>"` for the home file.
     pub basis: String,
+    /// Where the candidate value comes from: the satellite run's source or the home target file.
+    pub origin: CandidateOrigin,
+    pub content_hash: String,
+    pub record_hash: String,
+}
+
+/// Locates the origin of a conflict-candidate value (DEC-21 C) without embedding any content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CandidateOrigin {
+    Satellite {
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    Home {
+        path: String,
+    },
 }
 
 /// Carries an explicit decision or request for more context so later runs need not invent a verdict.
@@ -262,6 +282,10 @@ pub enum Verdict {
     Keep {
         cluster_id: String,
         canonical_ids: Vec<String>,
+        /// Candidate bases this verdict keeps (DEC-21 B); absent keeps the canonical_ids as before.
+        /// Four-rule clusters carry two sides of the same canonical_id, so only `bases` selects one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bases: Option<Vec<String>>,
     },
     NeedsMoreContext {
         cluster_id: String,

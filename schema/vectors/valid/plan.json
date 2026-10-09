@@ -46,6 +46,32 @@
         "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
         "unmapped": [],
         "sensitive_findings": [], "evidence_level": "measured"
+      },
+      {
+        "canonical_id": "dddddddddddddddddddddddddddddddd",
+        "source_record_id": "notes/edited.md", "source_locator": "notes/edited.md",
+        "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "target": "home",
+        "disposition": {"status": "omitted", "reason": {"code": "home_modified", "home_changed_fields": ["/body", "/frontmatter/tags"]}},
+        "field_map": [{"source_path": "/body", "canonical_path": "/content"}],
+        "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
+        "unmapped": [],
+        "sensitive_findings": [], "evidence_level": "measured"
+      }
+    ],
+    "conflict_clusters": [
+      {
+        "cluster_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "candidates": [
+          {"canonical_id": "dddddddddddddddddddddddddddddddd", "basis": "satellite:abcd2345",
+           "origin": {"kind": "satellite", "id": "abcd2345", "label": "Synthetic satellite"},
+           "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+           "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+          {"canonical_id": "dddddddddddddddddddddddddddddddd", "basis": "home:memories/dddddddddddddddddddddddddddddddd",
+           "origin": {"kind": "home", "path": "memories/dddddddddddddddddddddddddddddddd.md"},
+           "content_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+           "record_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+        ]
       }
     ],
     "source_unavailable": [],
@@ -60,6 +86,21 @@
       ]
     },
     "digest_inputs": {
+      "conflict_clusters": [
+        {
+          "cluster_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "candidates": [
+            {"canonical_id": "dddddddddddddddddddddddddddddddd", "basis": "satellite:abcd2345",
+             "origin": {"kind": "satellite", "id": "abcd2345", "label": "Synthetic satellite"},
+             "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+             "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+            {"canonical_id": "dddddddddddddddddddddddddddddddd", "basis": "home:memories/dddddddddddddddddddddddddddddddd",
+             "origin": {"kind": "home", "path": "memories/dddddddddddddddddddddddddddddddd.md"},
+             "content_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+             "record_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+          ]
+        }
+      ],
       "shared_basis_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "records": [
         {"canonical_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "record_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "predictions": [{"target": "home", "disposition": {"status": "accepted"}, "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}]}]}

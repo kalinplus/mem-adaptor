@@ -41,13 +41,25 @@ pub enum ChangeKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OmissionReason {
-    DuplicateOf { canonical_id: String },
+    DuplicateOf {
+        canonical_id: String,
+    },
     AlreadyMigrated,
     DeletedInTarget,
-    TargetUnsupported { field: String },
-    VerdictExcluded { cluster_id: String },
+    TargetUnsupported {
+        field: String,
+    },
+    VerdictExcluded {
+        cluster_id: String,
+    },
     SourceMissing,
     SecretReferenceUnsupported,
+    /// The home file changed since the last write and the satellite did not (DEC-21 B rule three):
+    /// the home value stays and the recorded basis is not advanced by this omission alone.
+    HomeModified {
+        /// Home-file-side pointers of the edited fields, derived from envelope evidence (DEC-21 A).
+        home_changed_fields: Vec<String>,
+    },
 }
 
 /// Explains a decision still needed before writing; the engine must not silently resolve it.
@@ -338,6 +350,8 @@ pub struct DigestInputs {
     /// Binds the exact shared-artifact basis receipt this plan reconciled against (DEC-19 shared artifacts).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_basis_hash: Option<String>,
+    /// Binds the four-rule conflict clusters, including the observed home hashes behind them (DEC-21 B).
+    pub conflict_clusters: Vec<ConflictCluster>,
 }
 
 /// Records source-file hashes for change checks without copying the source bundle into the report.
@@ -358,6 +372,14 @@ pub struct ManifestFile {
     pub path: String,
     pub content_hash: String,
     pub bytes: u64,
+}
+
+/// One four-rule conflict cluster with its two candidate values described by identity, not content (DEC-21 C).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConflictCluster {
+    pub cluster_id: String,
+    pub candidates: Vec<crate::canonical::ConflictCandidate>,
 }
 
 /// Locates a reported parsing anomaly without treating it as a successful record conversion.
@@ -398,6 +420,9 @@ pub struct PlanReport {
     pub model_calls: Vec<ModelCall>,
     pub gate_policy: GatePolicy,
     pub entries: Vec<PlanEntry>,
+    /// Four-rule conflict clusters (DEC-21 B/C): both sides changed differently after the last write.
+    /// Every unresolved conflict entry references its cluster by id; empty when there are none.
+    pub conflict_clusters: Vec<ConflictCluster>,
     pub source_unavailable: Vec<SourceUnavailable>,
     pub anomalies: Vec<Anomaly>,
     pub warnings: Vec<String>,

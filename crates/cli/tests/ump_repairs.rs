@@ -153,12 +153,27 @@ fn rich_record(id: &str) -> CanonicalRecord {
     record.conflict_candidates = Some(vec![ConflictCandidate {
         canonical_id: record.canonical_id.clone(),
         basis: "source-declared".into(),
+        origin: CandidateOrigin::Satellite {
+            id: "direct".into(),
+            label: None,
+        },
+        content_hash: record.content_hash.clone(),
+        record_hash: mem_adaptor_core::engine::record_hash(&record).unwrap(),
     }]);
     record.verdict = Some(Verdict::Keep {
         cluster_id: format!("sha256:{}", "c".repeat(64)),
         canonical_ids: vec![record.canonical_id.clone()],
+        bases: None,
     });
     record
+}
+
+/// Fingerprints the record as the fixture helper saw it before attaching candidates or a verdict.
+fn bare_candidate_hash(record: &CanonicalRecord) -> String {
+    let mut bare = record.clone();
+    bare.conflict_candidates = None;
+    bare.verdict = None;
+    mem_adaptor_core::engine::record_hash(&bare).unwrap()
 }
 
 /// Registers a selected real Writer or fault seam without replacing core approval logic.
@@ -320,6 +335,42 @@ fn write_native(directory: &TempDir, records: &[Value]) {
     .unwrap();
 }
 
+/// A UMP target has no OKF envelope, so a semantically valid home-side payload edit is never attributed
+/// to a home field list: it keeps the legacy target_modified refusal instead of reporting a
+/// home_modified omission with a pointer that does not exist in that target.
+#[test]
+fn ump_home_side_payload_edits_stay_target_modified() {
+    let directory = fixture();
+    let original = record("ump-home", "Stable UMP body.\n");
+    let runner = format_engine(&directory, vec![original.clone()], "ump");
+    let receipt = apply(&runner, &plan(&runner, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "ump-home-previous.json");
+    // Adding canonical tags inside the bridge stays schema-valid and outside the fields the native
+    // projection compares, so the target is still inspected as a managed record.
+    let path = directory.path().join("target/records.ump.json");
+    let mut native: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    native[0]["body"]["structured"]["mem_adaptor"]["tags"] = json!(["ump-home-tag"]);
+    fs::write(&path, serde_json::to_vec_pretty(&native).unwrap()).unwrap();
+    let inspected = runner
+        .registry
+        .writer("home")
+        .unwrap()
+        .inspect(&receipt.entries[0].target_id.clone().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(inspected.tags, Some(vec!["ump-home-tag".into()]));
+    let next = plan(&runner, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified
+        }
+    );
+    let before = snapshot(&directory.path().join("target"));
+    apply(&runner, &next).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+}
+
 /// Independently checks all retained optional metadata, vector values, native projections, and package version.
 #[test]
 fn optional_bridge_native_scope_consent_vector_and_version_are_exact() {
@@ -438,7 +489,15 @@ fn optional_bridge_native_scope_consent_vector_and_version_are_exact() {
     );
     assert_eq!(
         bridge["conflict_candidates"],
-        json!([{"canonical_id": original.canonical_id.clone(), "basis": "source-declared"}])
+        json!([{
+            "canonical_id": original.canonical_id.clone(),
+            "basis": "source-declared",
+            "origin": {"kind": "satellite", "id": "direct"},
+            "content_hash": original.content_hash.clone(),
+            // The helper stamps the candidate hash before attaching candidates/verdict, mirroring a
+            // producer that fingerprints the record it observed when clustering began.
+            "record_hash": bare_candidate_hash(&original),
+        }])
     );
     assert_eq!(
         bridge["verdict"],
