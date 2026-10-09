@@ -551,6 +551,7 @@
       "evidence_level": "third_party"
     }
   ],
+  "conflict_clusters": [],
   "source_unavailable": [
     {
       "system": "chatgpt",
@@ -962,7 +963,8 @@
       "rule_allowlist": [],
       "origin": "default",
       "user_selected": false
-    }
+    },
+    "conflict_clusters": []
   },
-  "plan_digest": "sha256:b5259cdfdab165d83756287825a8f630cf443c5e25486e738a981bb055ec7dd9"
+  "plan_digest": "sha256:aa680e15e0b6e16e86ac2199e8f6b5a26188ee344908a9ad50163b1e7df1dde1"
 }

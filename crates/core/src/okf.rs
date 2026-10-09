@@ -155,7 +155,32 @@ pub fn classify_native(metadata: &Value, record: &CanonicalRecord) -> NativeDive
 /// Outcome of applying home-side edits to a restored record, so callers can report what was adopted.
 pub struct HomeEdits {
     pub body_changed: bool,
-    pub tags_adopted: bool,
+    /// Frontmatter tags diverge from the envelope value, whether or not they were adoptable.
+    pub tags_changed: bool,
+    /// Advisory native-field divergence against the envelope-stored record (DEC-21 A).
+    pub native: NativeDivergence,
+}
+
+/// Home-file-side pointers of everything the home edit touched (DEC-21 A/B): the report carrier for
+/// `home_modified` and field-level display. Deterministic order: body, tags, then advisory fields.
+pub fn home_changed_pointers(edits: &HomeEdits) -> Vec<String> {
+    let mut fields = Vec::new();
+    if edits.body_changed {
+        fields.push("/body".into());
+    }
+    if edits.tags_changed {
+        fields.push("/frontmatter/tags".into());
+    }
+    if edits.native.title {
+        fields.push("/frontmatter/title".into());
+    }
+    if edits.native.sources {
+        fields.push("/frontmatter/sources".into());
+    }
+    if edits.native.generated {
+        fields.push("/frontmatter/generated".into());
+    }
+    fields
 }
 
 /// Applies home-side edits to a restored managed record (DEC-21 A): the current body is the fact, so its
@@ -190,13 +215,20 @@ pub fn apply_home_edits(record: &mut CanonicalRecord, metadata: &Value, body: &s
         }
         Some(_) => None,
     };
-    let tags_adopted = home_tags.as_ref().is_some_and(|home| home != &record.tags);
-    if tags_adopted && let Some(home) = home_tags {
+    // Divergence covers every parseable home value that differs from the envelope value, including
+    // shapes we refuse to adopt; a missing value that matches an absent envelope value is no edit.
+    let tags_changed = home_tags.as_ref() != Some(&record.tags);
+    if home_tags.is_some()
+        && home_tags.as_ref() != Some(&record.tags)
+        && let Some(home) = home_tags
+    {
         record.tags = home;
     }
+    let native = classify_native(metadata, record);
     HomeEdits {
         body_changed,
-        tags_adopted,
+        tags_changed,
+        native,
     }
 }
 

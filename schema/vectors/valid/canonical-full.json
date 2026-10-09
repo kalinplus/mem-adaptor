@@ -44,7 +44,11 @@
       "model": "synthetic-local", "dim": 2, "quality_impact": "Not measured; synthetic fixture only."
     },
     "conflict_cluster_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "conflict_candidates": [{"canonical_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "basis": "synthetic candidate"}],
-    "verdict": {"status": "keep", "cluster_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "canonical_ids": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}
+    "conflict_candidates": [{"canonical_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "basis": "satellite:abcd2345",
+      "origin": {"kind": "satellite", "id": "abcd2345", "label": "Synthetic satellite"},
+      "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "record_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+    "verdict": {"status": "keep", "cluster_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "canonical_ids": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "bases": ["satellite:abcd2345"]}
   }
 }

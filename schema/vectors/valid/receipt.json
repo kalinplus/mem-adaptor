@@ -61,8 +61,27 @@
         "target": "home", "disposition": {"status": "unresolved", "reason": {"code": "target_unmanaged"}},
         "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
         "sensitive_findings": [], "evidence_level": "measured"
+      },
+      {
+        "canonical_id": "dddddddddddddddddddddddddddddddd",
+        "source_record_id": "notes/edited.md", "source_locator": "notes/edited.md",
+        "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "target": "home",
+        "disposition": {"status": "omitted", "reason": {"code": "home_modified", "home_changed_fields": ["/frontmatter/title"]}},
+        "target_map": [{"canonical_path": "/content", "target_path": "/body", "rule": "body_bytes_unchanged"}],
+        "sensitive_findings": [], "evidence_level": "measured",
+        "prior_write": {
+          "target_id": "memories/dddddddddddddddddddddddddddddddd",
+          "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "target_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "verification": {"status": "verified"}
+        }
       }
     ],
-    "verdicts": []
+    "verdicts": [
+      {"status": "keep", "cluster_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "canonical_ids": ["dddddddddddddddddddddddddddddddd"], "bases": ["home:memories/dddddddddddddddddddddddddddddddd"]}
+    ]
   }
 }

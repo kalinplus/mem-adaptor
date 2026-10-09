@@ -1093,7 +1093,7 @@ fn stable_masked_plan_reports_match_reviewed_snapshots() {
         mem_adaptor_core::gate::mask_value(&mut value);
         let snapshot_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("tests/fixtures/m4/snapshots/{name}.plan.json"));
-        let expected: Value = serde_json::from_slice(&fs::read(snapshot_path).unwrap()).unwrap();
+        let expected: Value = serde_json::from_slice(&fs::read(&snapshot_path).unwrap()).unwrap();
         assert_eq!(value, expected, "Snapshot differs for {name}");
     }
 }

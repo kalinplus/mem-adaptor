@@ -147,11 +147,18 @@ pub fn canonical_full() -> CanonicalRecord {
     record.conflict_cluster_id = Some(HASH.into());
     record.conflict_candidates = Some(vec![ConflictCandidate {
         canonical_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-        basis: "synthetic".into(),
+        basis: "satellite:abcd2345".into(),
+        origin: CandidateOrigin::Satellite {
+            id: "abcd2345".into(),
+            label: Some("Synthetic satellite".into()),
+        },
+        content_hash: HASH.into(),
+        record_hash: HASH.into(),
     }]);
     record.verdict = Some(Verdict::Keep {
         cluster_id: HASH.into(),
         canonical_ids: vec![ID.into()],
+        bases: None,
     });
     record
 }
@@ -198,6 +205,7 @@ pub fn plan() -> PlanReport {
         model_calls: vec![],
         gate_policy: policy(),
         entries: vec![],
+        conflict_clusters: vec![],
         source_unavailable: vec![],
         anomalies: vec![],
         warnings: vec![],
@@ -214,6 +222,7 @@ pub fn plan() -> PlanReport {
             gate_policy: policy(),
             previous_receipt_hash: None,
             shared_basis_hash: None,
+            conflict_clusters: vec![],
         },
         plan_digest: HASH.into(),
         previous_receipt_ref: None,

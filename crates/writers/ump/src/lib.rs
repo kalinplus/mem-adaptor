@@ -490,6 +490,8 @@ impl Writer for UmpWriter {
                         record: item.and_then(|item| item.record.clone()),
                         target_hash: item.map(NativeRecord::target_hash).transpose()?,
                         classification: None,
+                        home_changed_fields: Vec::new(),
+                        envelope_hash: None,
                     },
                 ))
             })

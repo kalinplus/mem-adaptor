@@ -83,6 +83,15 @@
     {"base": "valid/config.json", "constraint": "an export bundle registers no path rather than an empty one", "patch": [{"op": "add", "path": "/satellites/1/path", "value": ""}]},
     {"base": "valid/plan.json", "constraint": "the shared-basis reference is a nonempty path", "patch": [{"op": "add", "path": "/shared_basis_ref", "value": ""}]},
     {"base": "valid/plan.json", "constraint": "the shared-basis hash is a hex digest, not prose", "patch": [{"op": "add", "path": "/digest_inputs/shared_basis_hash", "value": "not-a-hash"}]},
-    {"base": "valid/plan.json", "constraint": "target_unmanaged carries no payload", "patch": [{"op": "add", "path": "/entries/0/disposition", "value": {"status": "unresolved", "reason": {"code": "target_unmanaged", "cluster_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]}
+    {"base": "valid/plan.json", "constraint": "target_unmanaged carries no payload", "patch": [{"op": "add", "path": "/entries/0/disposition", "value": {"status": "unresolved", "reason": {"code": "target_unmanaged", "cluster_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}]},
+    {"base": "valid/plan.json", "constraint": "home_modified names its edited home fields", "patch": [{"op": "add", "path": "/entries/0/disposition", "value": {"status": "omitted", "reason": {"code": "home_modified"}}}]},
+    {"base": "valid/plan.json", "constraint": "an omission names at least one edited home field", "patch": [{"op": "add", "path": "/entries/0/disposition", "value": {"status": "omitted", "reason": {"code": "home_modified", "home_changed_fields": []}}}]},
+    {"base": "valid/plan.json", "constraint": "plans always state their conflict clusters", "patch": [{"op": "remove", "path": "/conflict_clusters"}]},
+    {"base": "valid/plan.json", "constraint": "digest inputs always state their conflict clusters", "patch": [{"op": "remove", "path": "/digest_inputs/conflict_clusters"}]},
+    {"base": "valid/plan.json", "constraint": "conflict candidates name their origin", "patch": [{"op": "remove", "path": "/conflict_clusters/0/candidates/0/origin"}]},
+    {"base": "valid/plan.json", "constraint": "conflict candidates carry a record hash", "patch": [{"op": "remove", "path": "/conflict_clusters/0/candidates/1/record_hash"}]},
+    {"base": "valid/plan.json", "constraint": "a cluster id is a hex digest, not prose", "patch": [{"op": "add", "path": "/conflict_clusters/0/cluster_id", "value": "not-a-hash"}]},
+    {"base": "valid/receipt.json", "constraint": "a keep verdict names at least one basis when it selects", "patch": [{"op": "add", "path": "/verdicts/0/bases", "value": []}]},
+    {"base": "valid/canonical-full.json", "constraint": "canonical conflict candidates also carry their origin", "patch": [{"op": "remove", "path": "/conflict_candidates/0/origin"}]}
   ]
 }

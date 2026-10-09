@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use mem_adaptor_core::Result;
-use mem_adaptor_core::canonical::{ActorKind, CanonicalRecord, EvidenceLevel};
+use mem_adaptor_core::canonical::{
+    ActorKind, CandidateOrigin, CanonicalRecord, EvidenceLevel, Verdict,
+};
 use mem_adaptor_core::engine::{
     Engine, WriteToken, content_hash, record_hash, timestamp, write_json_new,
 };
@@ -784,6 +786,434 @@ fn native_projection_edits_do_not_abort_unrelated_plans() {
         apply(&engine, &next).unwrap();
         assert_eq!(fs::read(&edited_path).unwrap(), edited_before);
     }
+}
+
+/// Group 2 (DEC-21 B rule three): a home-only tags edit keeps the home value, is omitted as
+/// home_modified with the edited fields listed, advances nothing, and never touches the bytes.
+#[test]
+fn home_only_edits_are_omitted_home_modified_and_keep_the_basis() {
+    let directory = fixture();
+    let original = record("kept", "Existing body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, body) = native(&text);
+    metadata["tags"] = json!(["home-tag"]);
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let engine = okf_engine(&directory, vec![original.clone()]);
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/frontmatter/tags".into()]
+            }
+        }
+    );
+    assert_eq!(
+        next.entries[0].prior_write, receipt.entries[0].prior_write,
+        "an omission alone must not advance the recorded basis"
+    );
+    let before = snapshot(&directory.path().join("target"));
+    apply(&engine, &next).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+
+    // A second home-only round that also rewrites the body reports both pointers in the fixed order
+    // (body, then tags), so the report bytes stay reproducible.
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, _) = native(&text);
+    metadata["title"] = json!("Home rewritten.");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\nHome rewritten.\n",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let engine = okf_engine(&directory, vec![original.clone()]);
+    let both = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        both.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/body".into(), "/frontmatter/tags".into()]
+            }
+        }
+    );
+}
+
+/// Group 6 rule four (DEC-21 B): both sides changed differently, so the entry is a conflict in a
+/// reported cluster; the cluster id follows the pinned formula and stays deterministic, and an
+/// unadjudicated cluster writes nothing.
+#[test]
+fn both_sides_changed_conflicts_cluster_and_reuses_verdicts() {
+    let directory = fixture();
+    let original = record("clash", "Original body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, _) = native(&text);
+    metadata["title"] = json!("Edited at home.");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\nEdited at home.\n",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let mut updated = record("clash", "Updated by the satellite.\n");
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let engine = okf_engine(&directory, vec![updated.clone()]);
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::Conflict {
+                cluster_id: next.conflict_clusters[0].cluster_id.clone()
+            }
+        }
+    );
+    // The pinned formula (DEC-21 B): prefix, canonical id, both record hashes, home bytes hash.
+    let prior = receipt.entries[0].prior_write.as_ref().unwrap();
+    let home_bytes = fs::read(&path).unwrap();
+    let expected_cluster = content_hash(
+        &[
+            b"mem-adaptor:conflict:v1".as_slice(),
+            original.canonical_id.as_bytes(),
+            prior.record_hash.as_bytes(),
+            record_hash(&updated).unwrap().as_bytes(),
+            content_hash(&home_bytes).as_bytes(),
+        ]
+        .concat(),
+    );
+    assert_eq!(next.conflict_clusters.len(), 1);
+    assert_eq!(next.conflict_clusters[0].cluster_id, expected_cluster);
+    assert_eq!(
+        next.digest_inputs.conflict_clusters, next.conflict_clusters,
+        "the digest binds the observed cluster evidence"
+    );
+    let candidates = &next.conflict_clusters[0].candidates;
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].basis, "satellite:direct");
+    assert_eq!(candidates[0].content_hash, updated.content_hash);
+    assert_eq!(candidates[0].record_hash, record_hash(&updated).unwrap());
+    assert_eq!(
+        candidates[1].basis,
+        format!("home:memories/{}", original.canonical_id)
+    );
+    assert_eq!(
+        candidates[1].origin,
+        CandidateOrigin::Home {
+            path: format!("memories/{}.md", original.canonical_id)
+        }
+    );
+    // The home candidate describes the observed home state (body and tags already adopted), not the
+    // satellite record and not the pre-adoption envelope.
+    let home_text = fs::read_to_string(&path).unwrap();
+    let (home_metadata, home_body) = native(&home_text);
+    let mut observed_home = okf::restore(&home_metadata, home_body).unwrap();
+    okf::apply_home_edits(&mut observed_home, &home_metadata, home_body);
+    assert_eq!(candidates[1].content_hash, observed_home.content_hash);
+    assert_eq!(
+        candidates[1].record_hash,
+        record_hash(&observed_home).unwrap()
+    );
+    // Re-planning the same state reproduces the same cluster id (deterministic ids, DEC-6).
+    assert_eq!(
+        plan(&engine, &directory, Some(&previous)).conflict_clusters[0].cluster_id,
+        expected_cluster
+    );
+    let before = snapshot(&directory.path().join("target"));
+    apply(&engine, &next).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+
+    // A verdict naming both sides cannot choose between two values of one record, so the cluster
+    // stays unresolved instead of silently writing the satellite over the home value (DEC-6 keeps
+    // "all are right" for member sets, which has no meaning for the two sides of one record).
+    let mut both_sides = receipt.clone();
+    both_sides.verdicts = vec![Verdict::Keep {
+        cluster_id: expected_cluster.clone(),
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec![
+            "satellite:direct".into(),
+            format!("home:memories/{}", original.canonical_id),
+        ]),
+    }];
+    let both_path = history(&directory, &both_sides, "verdict-both.json");
+    let undecided = plan(&engine, &directory, Some(&both_path));
+    assert!(matches!(
+        undecided.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::Conflict { .. }
+        }
+    ));
+    assert_eq!(undecided.conflict_clusters.len(), 1);
+
+    // A human verdict that keeps the home value records the home state as the new verified basis
+    // without touching a byte (DEC-21 B take-home).
+    let cluster_id = expected_cluster;
+    let home_basis = format!("home:memories/{}", original.canonical_id);
+    let mut adjudicated = receipt.clone();
+    adjudicated.verdicts = vec![Verdict::Keep {
+        cluster_id: cluster_id.clone(),
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec![home_basis]),
+    }];
+    let verdict_path = history(&directory, &adjudicated, "verdict-home.json");
+    let resolved = plan(&engine, &directory, Some(&verdict_path));
+    assert_eq!(
+        resolved.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/body".into()]
+            }
+        }
+    );
+    let advanced = resolved.entries[0].prior_write.as_ref().unwrap();
+    assert_eq!(advanced.target_hash, content_hash(&home_bytes));
+    // Take-home settles both sides: the home bytes are the observed target state and the current
+    // satellite record becomes the satellite-side reference, so nothing is left pending.
+    assert_eq!(advanced.content_hash, updated.content_hash);
+    assert_eq!(advanced.record_hash, record_hash(&updated).unwrap());
+    assert_eq!(advanced.verification, Verification::Verified);
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+    let settled = apply(&engine, &resolved).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+    assert_eq!(
+        settled.entries[0].prior_write.as_ref().unwrap().target_hash,
+        content_hash(&home_bytes),
+        "the receipt carries the advanced home basis"
+    );
+    // The settled basis describes both sides as observed, so the adjudicated state stops being a
+    // conflict: later rounds keep reporting the home divergence as a quiet omission, never a routine
+    // update that would overwrite the value the user chose to keep, and the settled basis holds.
+    let settled_path = history(&directory, &settled, "settled.json");
+    let calm = plan(&engine, &directory, Some(&settled_path));
+    assert_eq!(
+        calm.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/body".into()]
+            }
+        }
+    );
+    assert!(calm.conflict_clusters.is_empty());
+    assert_eq!(
+        calm.entries[0].prior_write, settled.entries[0].prior_write,
+        "a settled basis does not move on its own"
+    );
+
+    // A verdict that keeps the satellite value turns the conflict into a normal approved update
+    // that overwrites the edited home file (DEC-21 B take-satellite).
+    let mut take_satellite = receipt.clone();
+    take_satellite.verdicts = vec![Verdict::Keep {
+        cluster_id,
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec!["satellite:direct".into()]),
+    }];
+    let verdict_path = history(&directory, &take_satellite, "verdict-satellite.json");
+    let overwrite = plan(&engine, &directory, Some(&verdict_path));
+    assert_eq!(overwrite.entries[0].disposition, Disposition::Accepted);
+    apply(&engine, &overwrite).unwrap();
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("Updated by the satellite.")
+    );
+}
+
+/// Group 6 rule four, field variant (DEC-21 B/iron rule 7): changes on different fields still
+/// conflict; field-level merging is never invented.
+#[test]
+fn both_sides_changed_on_different_fields_still_conflict() {
+    let directory = fixture();
+    let original = record("split", "Shared body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, body) = native(&text);
+    metadata["tags"] = json!(["home-tag"]);
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let mut updated = record("split", "Shared body.\nSatellite appended a fact.\n");
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let engine = okf_engine(&directory, vec![updated]);
+    let next = plan(&engine, &directory, Some(&previous));
+    assert!(matches!(
+        next.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::Conflict { .. }
+        }
+    ));
+    assert_eq!(next.conflict_clusters.len(), 1);
+}
+
+/// Group 6 rule five (DEC-21 B): when the home file already equals this round's projection byte
+/// for byte, the entry converges to already_migrated without a write or a basis advance.
+#[test]
+fn a_home_that_matches_the_projection_converges_to_already_migrated() {
+    let directory = fixture();
+    let original = record("conv", "First body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let mut updated = record("conv", "Second body from the satellite.\n");
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let engine = okf_engine(&directory, vec![updated.clone()]);
+    // Render what a write would produce, then make the home exactly those bytes by hand.
+    let writer = engine.registry.writer("home").unwrap();
+    let mut planned = writer.plan(&updated, Some(&receipt.entries[0])).unwrap();
+    planned.previous_write = receipt.entries[0].prior_write.clone();
+    let bytes = writer.project(&planned).unwrap().unwrap();
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    fs::write(&path, &bytes).unwrap();
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        }
+    );
+    assert_eq!(
+        next.entries[0].prior_write, receipt.entries[0].prior_write,
+        "convergence is an omission and does not advance the basis"
+    );
+    assert!(next.conflict_clusters.is_empty());
+    let before = snapshot(&directory.path().join("target"));
+    apply(&engine, &next).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
+}
+
+/// A schema-valid edit of the tool-owned envelope block is attributable (DEC-21 A) and omitted as a
+/// home-only change; a change outside every attributable pointer keeps the human-decision refusal.
+#[test]
+fn envelope_edits_are_attributed_and_unknown_fields_stay_a_human_decision() {
+    let directory = fixture();
+    let original = record("opaque", "Stable body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, body) = native(&text);
+    metadata["mem_adaptor"]["scope"] = json!("project");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let engine = okf_engine(&directory, vec![original.clone()]);
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::HomeModified {
+                home_changed_fields: vec!["/frontmatter/mem_adaptor".into()]
+            }
+        }
+    );
+
+    // The same file with an added unknown frontmatter key changes bytes without touching the
+    // envelope or any declared pointer: nothing attributes that edit, so it stays refused.
+    let (mut metadata, body) = native(&text);
+    metadata["neighbour_note"] = json!("added by hand");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let next = plan(&engine, &directory, Some(&previous));
+    assert_eq!(
+        next.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified
+        }
+    );
+}
+
+/// A verdict cannot take home a change that has no field list to report: the entry stays unresolved
+/// instead of emitting an omission the report schema rejects (which would fail the whole plan).
+#[test]
+fn take_home_verdicts_need_an_attributable_home_change() {
+    let directory = fixture();
+    let original = record("vague", "Stable body.\n");
+    let initial = okf_engine(&directory, vec![original.clone()]);
+    let receipt = apply(&initial, &plan(&initial, &directory, None)).unwrap();
+    let previous = history(&directory, &receipt, "previous.json");
+    let path = directory
+        .path()
+        .join(format!("target/memories/{}.md", original.canonical_id));
+    let text = fs::read_to_string(&path).unwrap();
+    let (mut metadata, body) = native(&text);
+    metadata["neighbour_note"] = json!("added by hand");
+    fs::write(
+        &path,
+        format!(
+            "---\n{}---\n{body}",
+            serde_saphyr::to_string(&metadata).unwrap()
+        ),
+    )
+    .unwrap();
+    let mut updated = record("vague", "Satellite rewrite.\n");
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let engine = okf_engine(&directory, vec![updated]);
+    let conflict = plan(&engine, &directory, Some(&previous));
+    let cluster_id = conflict.conflict_clusters[0].cluster_id.clone();
+    let mut adjudicated = receipt.clone();
+    adjudicated.verdicts = vec![Verdict::Keep {
+        cluster_id,
+        canonical_ids: vec![original.canonical_id.clone()],
+        bases: Some(vec![format!("home:memories/{}", original.canonical_id)]),
+    }];
+    let verdict_path = history(&directory, &adjudicated, "verdict.json");
+    let next = plan(&engine, &directory, Some(&verdict_path));
+    assert!(matches!(
+        next.entries[0].disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::Conflict { .. }
+        }
+    ));
+    assert_eq!(next.conflict_clusters.len(), 1);
+    let before = snapshot(&directory.path().join("target"));
+    apply(&engine, &next).unwrap();
+    assert_eq!(snapshot(&directory.path().join("target")), before);
 }
 
 /// An internally inconsistent managed identity lets unrelated planning continue but refuses writes.

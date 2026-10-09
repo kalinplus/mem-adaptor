@@ -54,3 +54,14 @@ configuration stays valid without it (`valid/config-direct.json`).
 The 83 invalid cases also reject wrong-alphabet or wrong-length registry IDs, unknown registry members,
 missing system/issuance fields, non-RFC 3339 issuance times, empty labels, empty registered paths, and
 payload keys on the payload-free `target_unmanaged` refusal.
+
+M6 home-edit rules (DEC-21 B/C) add the four-rule conflict carriers and the home-only omission:
+`valid/plan.json` carries an `omitted home_modified` entry with its `home_changed_fields`, a top-level
+`conflict_clusters` list with satellite and home candidates, and the same list bound inside
+`digest_inputs`; `valid/receipt.json` carries a `home_modified` entry and a `keep` verdict selecting a
+candidate through `bases`; `valid/canonical-full.json` extends `conflict_candidates` with `origin`,
+`content_hash`, and `record_hash`. `prior_write` gains no field.
+The 92 invalid cases also reject a `home_modified` omission without (or with an empty)
+`home_changed_fields`, plans and digest inputs without their `conflict_clusters`, conflict candidates
+without an origin or record hash, a non-hash cluster id, an empty verdict `bases` list, and canonical
+conflict candidates without an origin.

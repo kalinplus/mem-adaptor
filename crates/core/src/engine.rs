@@ -16,7 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use tracing::info;
 
 use crate::Result;
-use crate::canonical::{CanonicalRecord, Verdict};
+use crate::canonical::{CandidateOrigin, CanonicalRecord, ConflictCandidate, Verdict};
 use crate::governance::{ApprovalReceipt, FindingDisposition, GatePolicy};
 use crate::plugins::*;
 use crate::reports::*;
@@ -671,6 +671,7 @@ impl Engine {
         }
         let mut batches = BTreeMap::new();
         let mut entries = Vec::new();
+        let mut conflict_clusters: Vec<ConflictCluster> = Vec::new();
         let mut targets = Vec::new();
         let mut writers = BTreeMap::new();
         // Bind complete records so unchanged body text cannot hide scope, consent, or source metadata changes.
@@ -880,14 +881,6 @@ impl Engine {
                                 };
                             }
                             Some(actual)
-                                if record_hash(&actual)? != prior.record_hash
-                                    || state.target_hash.as_ref() != Some(&prior.target_hash) =>
-                            {
-                                planned.disposition = Disposition::Unresolved {
-                                    reason: UnresolvedReason::TargetModified,
-                                }
-                            }
-                            Some(actual)
                                 if planned.previous_write.is_some()
                                     && actual.canonical_id != record.canonical_id
                                     || planned.previous_write.is_none()
@@ -901,22 +894,237 @@ impl Engine {
                                     reason: UnresolvedReason::TargetModified,
                                 };
                             }
-                            Some(_)
-                                if planned.previous_write.is_some()
-                                    && record_hash(&planned.record)? == prior.record_hash =>
-                            {
-                                planned.disposition = Disposition::Omitted {
-                                    reason: OmissionReason::AlreadyMigrated,
+                            // DEC-21 B four rules for an own prior write: "home changed" is
+                            // byte-level (restored record or whole file differs from the receipt),
+                            // "satellite changed" is the record hash, and a both-changed state needs
+                            // the Writer's projection to prove convergence instead of guessing.
+                            Some(actual) if planned.previous_write.is_some() => {
+                                let satellite_changed =
+                                    record_hash(&planned.record)? != prior.record_hash;
+                                let home_changed = record_hash(&actual)? != prior.record_hash
+                                    || state.target_hash.as_ref() != Some(&prior.target_hash);
+                                let observed_hash = record_hash(&actual)?;
+                                let observed_target_hash = state
+                                    .target_hash
+                                    .clone()
+                                    .context("Missing target hash for a present record")?;
+                                // Basis a human verdict records. Take-satellite keeps the observed
+                                // home record, because the approved write replaces exactly that state.
+                                let observed_basis = PriorWrite {
+                                    target_id: prior.target_id.clone(),
+                                    content_hash: actual.content_hash.clone(),
+                                    record_hash: observed_hash.clone(),
+                                    target_hash: observed_target_hash.clone(),
+                                    verification: Verification::Verified,
+                                };
+                                // Take-home settles the satellite value as the satellite-side reference
+                                // while the observed home bytes become the target reference. Later rounds
+                                // then read the satellite as unchanged and the home as deliberately
+                                // divergent, so they report a quiet rule-three omission instead of a
+                                // routine update that would overwrite the home value the verdict kept
+                                // (DEC-21 B: the basis describes what was actually agreed).
+                                let settled_basis = PriorWrite {
+                                    target_id: prior.target_id.clone(),
+                                    content_hash: planned.record.content_hash.clone(),
+                                    record_hash: record_hash(&planned.record)?,
+                                    target_hash: observed_target_hash.clone(),
+                                    verification: Verification::Verified,
+                                };
+                                // Attribution for the home rules: the user-facing pointers the Writer
+                                // derived, plus the tool-owned block itself when that block differs
+                                // from the recorded basis (DEC-21 A envelope edit).
+                                let home_fields = if !state.home_changed_fields.is_empty() {
+                                    state.home_changed_fields.clone()
+                                } else if matches!(
+                                    state.envelope_hash.as_ref(),
+                                    Some(hash) if hash != &prior.record_hash
+                                ) {
+                                    vec!["/frontmatter/mem_adaptor".to_string()]
+                                } else {
+                                    Vec::new()
+                                };
+                                if !satellite_changed && !home_changed {
+                                    planned.disposition = Disposition::Omitted {
+                                        reason: OmissionReason::AlreadyMigrated,
+                                    };
+                                } else if satellite_changed && home_changed {
+                                    match writer.project(&planned)? {
+                                        Some(bytes)
+                                            if state.target_hash.as_ref()
+                                                == Some(&content_hash(&bytes)) =>
+                                        {
+                                            // Rule five: the home already equals this round's
+                                            // projection; nothing to write and no basis advance.
+                                            planned.disposition = Disposition::Omitted {
+                                                reason: OmissionReason::AlreadyMigrated,
+                                            };
+                                        }
+                                        None => {
+                                            // The Writer cannot render a projection, so
+                                            // convergence stays unproven: keep the legacy
+                                            // refusal (design.md:536) instead of guessing.
+                                            planned.disposition = Disposition::Unresolved {
+                                                reason: UnresolvedReason::TargetModified,
+                                            };
+                                        }
+                                        Some(_) => {
+                                            // Rule four: both sides changed differently. Cluster
+                                            // the two candidates for a human verdict (DEC-6/18)
+                                            // unless a stored verdict already picks a side.
+                                            let cluster_id = conflict_cluster_id(
+                                                &record.canonical_id,
+                                                prior,
+                                                &planned.record,
+                                                &state.target_hash.clone().unwrap_or_default(),
+                                            )?;
+                                            let satellite_id = satellite
+                                                .map(|item| item.id.clone())
+                                                .unwrap_or_else(|| "direct".into());
+                                            let satellite_basis =
+                                                format!("satellite:{satellite_id}");
+                                            let home_basis = format!("home:{}", prior.target_id);
+                                            let keep = |basis: &str| {
+                                                previous
+                                                    .as_ref()
+                                                    .and_then(|receipt| {
+                                                        receipt.verdicts.iter().find_map(
+                                                            |verdict| match verdict {
+                                                                Verdict::Keep {
+                                                                    cluster_id: id,
+                                                                    bases: Some(bases),
+                                                                    ..
+                                                                } if id == &cluster_id => Some(
+                                                                    bases
+                                                                        .iter()
+                                                                        .any(|kept| kept == basis),
+                                                                ),
+                                                                _ => None,
+                                                            },
+                                                        )
+                                                    })
+                                                    .unwrap_or(false)
+                                            };
+                                            // A verdict naming both sides is undecided: DEC-6's
+                                            // "keep all" means "both are right", which cannot
+                                            // choose between two values of one record.
+                                            let keeps_satellite = keep(&satellite_basis);
+                                            let keeps_home = keep(&home_basis);
+                                            if keeps_satellite && !keeps_home {
+                                                planned.previous_write = Some(observed_basis);
+                                                if !writer.capabilities().update {
+                                                    planned.disposition = Disposition::Omitted {
+                                                        reason: OmissionReason::TargetUnsupported {
+                                                            field: "/content".into(),
+                                                        },
+                                                    };
+                                                }
+                                            } else if keeps_home
+                                                && !keeps_satellite
+                                                && !home_fields.is_empty()
+                                            {
+                                                // Take-home: the home value wins and the observed
+                                                // state becomes the recorded basis; bytes stay
+                                                // untouched (DEC-21 B). An unattributable home change
+                                                // has no field list to report, so it stays unresolved
+                                                // instead of emitting an invalid omission.
+                                                planned.previous_write = Some(settled_basis);
+                                                planned.disposition = Disposition::Omitted {
+                                                    reason: OmissionReason::HomeModified {
+                                                        home_changed_fields: home_fields,
+                                                    },
+                                                };
+                                            } else {
+                                                planned.disposition = Disposition::Unresolved {
+                                                    reason: UnresolvedReason::Conflict {
+                                                        cluster_id: cluster_id.clone(),
+                                                    },
+                                                };
+                                                conflict_clusters.push(ConflictCluster {
+                                                    cluster_id,
+                                                    candidates: vec![
+                                                        ConflictCandidate {
+                                                            canonical_id: record
+                                                                .canonical_id
+                                                                .clone(),
+                                                            basis: satellite_basis,
+                                                            origin: CandidateOrigin::Satellite {
+                                                                id: satellite_id,
+                                                                label: satellite.and_then(|item| {
+                                                                    item.label.clone()
+                                                                }),
+                                                            },
+                                                            content_hash: planned
+                                                                .record
+                                                                .content_hash
+                                                                .clone(),
+                                                            record_hash: record_hash(
+                                                                &planned.record,
+                                                            )?,
+                                                        },
+                                                        ConflictCandidate {
+                                                            canonical_id: record
+                                                                .canonical_id
+                                                                .clone(),
+                                                            basis: home_basis,
+                                                            origin: CandidateOrigin::Home {
+                                                                path: format!(
+                                                                    "{}.md",
+                                                                    prior.target_id
+                                                                ),
+                                                            },
+                                                            content_hash: actual
+                                                                .content_hash
+                                                                .clone(),
+                                                            record_hash: observed_hash,
+                                                        },
+                                                    ],
+                                                });
+                                            }
+                                        }
+                                    }
+                                } else if home_changed {
+                                    // Rule three: only the home changed. The home value stays and
+                                    // the recorded basis is not advanced by this omission alone;
+                                    // a change outside every attributable pointer keeps the legacy
+                                    // human-decision refusal instead of inventing a field list.
+                                    if home_fields.is_empty() {
+                                        planned.disposition = Disposition::Unresolved {
+                                            reason: UnresolvedReason::TargetModified,
+                                        };
+                                    } else {
+                                        planned.disposition = Disposition::Omitted {
+                                            reason: OmissionReason::HomeModified {
+                                                home_changed_fields: home_fields,
+                                            },
+                                        };
+                                    }
+                                } else if !writer.capabilities().update {
+                                    // Rule two: only the satellite changed, planned as an update.
+                                    planned.disposition = Disposition::Omitted {
+                                        reason: OmissionReason::TargetUnsupported {
+                                            field: "/content".into(),
+                                        },
+                                    };
                                 }
                             }
-                            Some(_) if !writer.capabilities().update => {
-                                planned.disposition = Disposition::Omitted {
-                                    reason: OmissionReason::TargetUnsupported {
-                                        field: "/content".into(),
-                                    },
+                            // A duplicate alias carries its representative's prior write: keep the
+                            // legacy byte-level split; unchanged aliases fall through to DEC-6
+                            // duplicate grouping, changed representatives stay refused.
+                            Some(actual) => {
+                                if record_hash(&actual)? != prior.record_hash
+                                    || state.target_hash.as_ref() != Some(&prior.target_hash)
+                                {
+                                    planned.disposition = Disposition::Unresolved {
+                                        reason: UnresolvedReason::TargetModified,
+                                    };
+                                } else if !writer.capabilities().update {
+                                    planned.disposition = Disposition::Omitted {
+                                        reason: OmissionReason::TargetUnsupported {
+                                            field: "/content".into(),
+                                        },
+                                    };
                                 }
                             }
-                            Some(_) => {}
                         }
                     } else {
                         warnings.push(format!("Target {target}, record {}: previous write was not verified; confirm target state manually.", record.canonical_id));
@@ -938,7 +1146,7 @@ impl Engine {
                     };
                 }
                 if !gate_dispositions.contains_key(&record.canonical_id)
-                    && let Some(Verdict::Keep { cluster_id, canonical_ids }) = record.conflict_cluster_id.as_ref().and_then(|cluster| previous.as_ref()?.verdicts.iter().find(|verdict| matches!(verdict, Verdict::Keep { cluster_id, .. } if cluster_id == cluster)))
+                    && let Some(Verdict::Keep { cluster_id, canonical_ids, .. }) = record.conflict_cluster_id.as_ref().and_then(|cluster| previous.as_ref()?.verdicts.iter().find(|verdict| matches!(verdict, Verdict::Keep { cluster_id, .. } if cluster_id == cluster)))
                     && !canonical_ids.contains(&record.canonical_id) {
                         planned.disposition = Disposition::Omitted { reason: OmissionReason::VerdictExcluded { cluster_id: cluster_id.clone() } };
                 }
@@ -1103,6 +1311,7 @@ impl Engine {
             gate_policy: gate_policy.clone(),
             previous_receipt_hash,
             shared_basis_hash,
+            conflict_clusters: conflict_clusters.clone(),
         };
         let created_at = timestamp()?;
         let systems: BTreeSet<_> = records
@@ -1149,6 +1358,7 @@ impl Engine {
             model_calls: vec![],
             gate_policy,
             entries,
+            conflict_clusters,
             source_unavailable,
             anomalies,
             warnings,
@@ -1583,6 +1793,24 @@ impl Engine {
         crate::schema::validate("receipt-report", &report)?;
         Ok(report)
     }
+}
+
+/// Deterministic four-rule conflict-cluster id (DEC-21 B): any further change on either side
+/// produces a new id, so a stored verdict can never apply to changed facts.
+fn conflict_cluster_id(
+    canonical_id: &str,
+    prior: &PriorWrite,
+    satellite: &CanonicalRecord,
+    home_target_hash: &str,
+) -> Result<String> {
+    let digest = Sha256::new()
+        .chain_update(b"mem-adaptor:conflict:v1")
+        .chain_update(canonical_id.as_bytes())
+        .chain_update(prior.record_hash.as_bytes())
+        .chain_update(record_hash(satellite)?.as_bytes())
+        .chain_update(home_target_hash.as_bytes())
+        .finalize();
+    Ok(format!("sha256:{}", HEXLOWER.encode(&digest)))
 }
 
 fn audit_fields(output: &mut ReaderOutput) {

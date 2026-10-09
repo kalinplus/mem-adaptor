@@ -385,9 +385,10 @@ fn ump_source_updates_preserve_target_creation_and_deleted_records_stay_deleted(
     assert!(ump(&directory).is_empty());
 }
 
-/// Protects display-only edits through historical hashes and rejects native/bridge contradictions before planning.
+/// A home-only OKF display edit keeps the user value as a quiet omission, while a UMP payload edit that
+/// contradicts its migration bridge still refuses planning before any write.
 #[test]
-fn native_fields_changed_without_canonical_changes_block_history_updates() {
+fn home_display_edits_are_omitted_and_native_bridge_contradictions_refuse_planning() {
     for writer in ["okf", "ump"] {
         let directory = fixture();
         let engine = engine(&directory, record(), writer);
@@ -459,11 +460,19 @@ fn native_fields_changed_without_canonical_changes_block_history_updates() {
         );
         let previous = previous(&directory, &receipt);
         let report = plan(&engine, &directory, Some(&previous));
+        // DEC-21 B rule three: an attributed home-only edit keeps the user value and omits the
+        // update instead of refusing it; the basis is not advanced by this omission alone.
         assert_eq!(
             report.entries[0].disposition,
-            Disposition::Unresolved {
-                reason: UnresolvedReason::TargetModified
+            Disposition::Omitted {
+                reason: OmissionReason::HomeModified {
+                    home_changed_fields: vec!["/frontmatter/title".into()]
+                }
             }
+        );
+        assert_eq!(
+            report.entries[0].prior_write, receipt.entries[0].prior_write,
+            "an omission alone must not advance the recorded basis"
         );
     }
 }
