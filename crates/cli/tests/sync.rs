@@ -325,9 +325,7 @@ fn discover_lists_candidates_readonly_and_marks_registration() {
         "the codex directory is a direct candidate: {stdout}"
     );
     assert!(
-        stdout.contains("1 candidate(s): 0 registered, 1 unregistered; nothing was written.")
-            || stdout
-                .contains("2 candidate(s): 0 registered, 2 unregistered; nothing was written."),
+        stdout.contains("2 candidate(s): 0 registered, 2 unregistered; nothing was written."),
         "{stdout}"
     );
     assert_eq!(
@@ -398,6 +396,44 @@ fn discover_refuses_a_directory_without_a_home_config() {
         String::from_utf8_lossy(&output.stderr).contains("run `mem-adaptor init"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// discover honors a non-default CODEX_HOME: codex memories live under $CODEX_HOME/memories.
+#[test]
+fn discover_honors_codex_home() {
+    let root = TempDir::new().unwrap();
+    let fake_home = root.path().join("fake-home");
+    fs::create_dir_all(&fake_home).unwrap();
+    let home = root.path().join("home");
+    let codex_home = root.path().join("codex-alt");
+    fs::create_dir_all(codex_home.join("memories")).unwrap();
+    fs::write(codex_home.join("memories/cx.md"), "# Alt codex\n").unwrap();
+    assert!(
+        cli(&["init", home.to_str().unwrap()], Some(&fake_home))
+            .status
+            .success()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_mem-adaptor"))
+        .args(["discover", home.to_str().unwrap()])
+        .env("LOG_LEVEL", "info")
+        .env("XDG_CONFIG_HOME", common::config_home())
+        .env("HOME", &fake_home)
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert_eq!(common::exit_code(&output), common::EXIT_OK);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "[unregistered] {}",
+            codex_home.join("memories").display()
+        )),
+        "the CODEX_HOME override is scanned: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 candidate(s): 0 registered, 1 unregistered"),
+        "{stdout}"
     );
 }
 

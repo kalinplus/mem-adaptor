@@ -937,15 +937,26 @@ fn run_discover(home_directory: &Path, extra: &[PathBuf]) -> Result<i32> {
     let user_home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set; cannot locate the built-in memory directories")?;
-    let builtin = [user_home.join(".claude/projects"), user_home.join(".codex")];
     // Claude Code nests each project's memory under ~/.claude/projects/<slug>/memory; Codex keeps its
-    // memories directly under ~/.codex/memories (docs/source-memory-formats.md).
-    if let Ok(children) = fs::read_dir(&builtin[0]) {
-        for child in children.flatten() {
-            consider_candidate(&mut candidates, &child.path().join("memory"));
+    // memories directly under $CODEX_HOME/memories (default ~/.codex/memories;
+    // docs/source-memory-formats.md).
+    let claude_projects = user_home.join(".claude/projects");
+    if claude_projects.is_dir() {
+        match fs::read_dir(&claude_projects) {
+            Ok(children) => {
+                for child in children.flatten() {
+                    consider_candidate(&mut candidates, &child.path().join("memory"));
+                }
+            }
+            Err(error) => {
+                println!("Unreadable: {} ({error})", claude_projects.display())
+            }
         }
     }
-    consider_candidate(&mut candidates, &builtin[1].join("memories"));
+    let codex_root = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| user_home.join(".codex"));
+    consider_candidate(&mut candidates, &codex_root.join("memories"));
     for path in extra {
         let path = normalize_path(path)?;
         if path.is_dir() {
