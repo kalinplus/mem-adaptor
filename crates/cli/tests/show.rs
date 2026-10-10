@@ -160,8 +160,27 @@ fn show_prints_both_masked_candidates_without_touching_anything() {
         "{stdout}"
     );
     assert!(stdout.contains("Edited at home."), "{stdout}");
-    // The view must carry exactly the hashes the plan declared for both candidates; the home file's
-    // own envelope also carries hash fields, so presence of the declared values is the precise check.
+    // The view must carry the hashes the plan declared for both candidates. Line-start counting is
+    // the independent pin: the home file's own envelope also carries hash fields, but only show's
+    // headers print them at column zero, one per candidate section.
+    for (label, prefix) in [("content", "content_hash: "), ("record", "record_hash: ")] {
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| line.starts_with(prefix))
+                .count(),
+            2,
+            "one declared {label} hash per candidate: {stdout}"
+        );
+    }
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("--- body (masked) ---"))
+            .count(),
+        2,
+        "both candidates print a body section: {stdout}"
+    );
     let report: Value = serde_json::from_str(&fs::read_to_string(&plan).unwrap()).unwrap();
     let candidates = report["conflict_clusters"][0]["candidates"]
         .as_array()
