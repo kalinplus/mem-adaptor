@@ -262,7 +262,7 @@ D1 不写 `*.ump.md`（需要时再加，届时 front-matter 必须是 JSON）�
 官方 schema、license 和来源需通过 `crates/writer-ump/schema/` 随包分发，运行不依赖 `lab/upstream`。
 原生 `target_hash`、共享 `artifacts` 与 `target_map` 需进入审批依据；
 WriteToken 核对 Writer 读取的原生字节。源创建时刻缺失时明确标为目标迁移时间，更新保持不变；
-非空 `consent.redact` 未经处理时拒写。具体映射和限制见 [M5 方案](m5-writer-proposal.md)。
+非空 `consent.redact` 未经处理时拒写。具体映射和限制见 [M5 方案](archive/m5-writer-proposal.md)。
 
 两个 Writer 都在 `capabilities()` 里如实声明承载什么、不承载什么，计划报告据此预测。
 

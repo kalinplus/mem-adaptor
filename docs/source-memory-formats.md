@@ -46,7 +46,7 @@
 | --- | --- | --- | --- |
 | ChatGPT | Settings → Data Controls → Export data（邮件链接 24h 有效，最长 7 天） | `conversations.json`（mapping 树 + `current_node`）、`chat.html`、`user.json`、`message_feedback.json`、`model_comparisons.json`、`shared_conversations.json`，记忆见下 | **无 per-entry provenance**（没有 `source_conversation_id`）；合成层（memory summary / reference chat history）没有独立导出；删除的条目不在导出，`enabled:false` 的保留；Team/Enterprise 的 workspace 导出不含成员记忆（记忆是账号级） |
 | ChatGPT 记忆文件 | 同上 | **不在导出包里**（第三方对真实导出包的核对结论：自定义指令包含、记忆不包含） | 记忆是「持续更新的合成物」，不是可落盘文件；官方对导出的措辞只有含糊的「聊天记录和其他相关账号数据」。→ 只能走 Prompt 抽取，见 [reader-prompts.md](reader-prompts.md)。仍**待真导出核实** |
-| Claude.ai | Settings → Privacy / Data → Export Data（ZIP） | `conversations.json`、`projects.json`、`memories.json`、`users.json` | 官方 FAQ 明说「All memory data is included in data exports」。`memories.json` = **单元素数组**：新版 `memory_files[]{path,content,updated_at}` + 旧版 `conversations_memory`/`project_memories`/`account_uuid`（详见 [PROGRESS.md](PROGRESS.md) 的「网页端记忆导出形态」一节）。`conversations.json` 里有 `project_uuid` 但没有 project 名字 |
+| Claude.ai | Settings → Privacy / Data → Export Data（ZIP） | `conversations.json`、`projects.json`、`memories.json`、`users.json` | 官方 FAQ 明说「All memory data is included in data exports」。`memories.json` = **单元素数组**：新版 `memory_files[]{path,content,updated_at}` + 旧版 `conversations_memory`/`project_memories`/`account_uuid`（详见 [PROGRESS.md](archive/PROGRESS.md) 的「网页端记忆导出形态」一节）。`conversations.json` 里有 `project_uuid` 但没有 project 名字 |
 | Gemini | takeout.google.com：勾 `Gemini`（Gems）+ `My Activity` → 只勾 `Gemini Apps` | `My Activity.json`（Gemini Apps 段，走 Google Data Portability 的 My Activity schema） | **只有用户 prompt，没有任何模型回复**；记忆**结构上就导不出**——它是从活动记录检索归纳出的派生层，官方文档里没有任何记忆/个性化导出选项 |
 
 ### 会话导出格式的取数规则（remnic 的 importer 已给出可复用做法）
@@ -109,7 +109,7 @@ metadata:
 - `MEMORY.md` 被 Reader 登记（哈希、字节数）但**不作为记录迁移**（Claude Code 的索引是从 topic 文件派生的展示层，迁了就重复）；报告里状态是 `registered_only`、`layer: index`，不是静默跳过。
 - 两种变体的 `type` 都落 `source_kind`，但源指针不同：嵌套式读 `/frontmatter/metadata/type`（且需 `metadata.node_type: memory` 才认作 Claude Code；否则该 `type` 不落 `source_kind`，只留在 `source_extra`/`unmapped`），扁平式读 `/frontmatter/type`，两者 canonical 目标都是 `/source_kind`。分类三档：`project`/`tool` 落 `explicit_standard`，`profile`/`preference`/`instruction` 落 DNA 桶，其余（如 `feedback`、`user`）落 `unknown_standard`：`evidence_level: inferred` 并列入 `unmapped`（语义未解释）。完全无 `type` 的文件不设 `source_kind`（`evidence_level` 同样落 `inferred`）——不按文件名或正文猜类别（[reader.rs](../crates/core/src/reader.rs) 的 classify 契约）。
 - OKF `title` 规则会剥掉正文首行的 markdown 标题标记（`#`/`##`）再取 80 个字符；字段保留清单（unmapped）标记的是**语义未解释**，与字节数保留（`source_extra`）是两个维度，报告同时给出两者。
-- 同一目标背靠背生成的多个计划，先 apply 的那个会推进共享产物（index/log）依据，其余计划的 apply 因依据漂移被拒（退 4），需重新出计划——多卫星依次汇入时的预期行为，见 [m6-cli-proposal.md](m6-cli-proposal.md) §1。
+- 同一目标背靠背生成的多个计划，先 apply 的那个会推进共享产物（index/log）依据，其余计划的 apply 因依据漂移被拒（退 4），需重新出计划——多卫星依次汇入时的预期行为，见 [m6-cli-proposal.md](archive/m6-cli-proposal.md) §1。
 
 **Claude Code 会话 jsonl**（实测事件类型，`parentUuid` 构成消息树）：
 

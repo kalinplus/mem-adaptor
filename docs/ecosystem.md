@@ -56,7 +56,7 @@ memcommons、MemOS、ai-memory、mcp-memory-service、Supermemory，
 - 2026-10-05 检索核实并浅克隆到 `lab/upstream/gitleaks/`；
   参考提交 `b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b`。
 - 六条候选签名正则已通过 Rust `regex` 实际编译实验；规则选择与语义边界见
-  [M3 契约补充](m3-contract-proposal.md)。只作为规则数据参考，不运行其代码，
+  [M3 契约补充](archive/m3-contract-proposal.md)。只作为规则数据参考，不运行其代码，
   不把本地克隆作为产品或测试依赖。用户已确认复用，数据与 MIT 署名在 `crates/core/rules/`。
 
 ## 映射目标（Writer 侧）
