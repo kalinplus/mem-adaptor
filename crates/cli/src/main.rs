@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use mem_adaptor_core::canonical::Verdict;
+use mem_adaptor_core::canonical::{CandidateOrigin, Verdict};
 use mem_adaptor_core::engine::{BasisMismatch, Engine, SCHEMA_VERSION, timestamp, write_json_new};
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::plugins::Registry;
@@ -81,6 +81,19 @@ enum Command {
         /// Explicitly approve the plan without a terminal prompt.
         #[arg(long)]
         yes: bool,
+    },
+    /// Print a local, masked comparison of the two candidates behind one entry of a plan.
+    ///
+    /// Reports never carry bodies (DEC-1), so this read-only view is the local channel for judging
+    /// a conflict before deciding it: the satellite side is the current source file behind the entry's
+    /// locator, the home side is the target file the cluster names. Nothing is written anywhere.
+    Show {
+        /// Plan report whose conflict to inspect.
+        #[arg(value_name = "PLAN")]
+        plan: PathBuf,
+        /// Canonical id of the record to inspect.
+        #[arg(value_name = "CANONICAL_ID")]
+        canonical_id: String,
     },
 }
 
@@ -259,13 +272,18 @@ fn interactive(yes: bool, terminal: bool) -> bool {
 }
 
 /// Asks one decision per open four-rule conflict cluster, whose two candidates describe the same record.
-/// Any other cluster shape, an unknown answer or end of input leaves the cluster unresolved, so the run
-/// never invents a verdict; recorded choices persist in the receipt and are reused next run (DEC-6/18).
+/// A bulk answer (`s` keep satellite everywhere, `h` keep home everywhere) settles every open cluster
+/// at once yet still records one verdict per cluster, bound to that cluster's id (DEC-21 B), so a bulk
+/// choice can never leak into another state; `n` records nothing. `p`, an unrecognized answer, and end
+/// of input fall back to per-cluster asking, which itself leaves unresolved whatever it cannot answer,
+/// so the run never invents a verdict; recorded choices persist in the receipt and are reused next run
+/// (DEC-6/18).
 fn collect_decisions(
     clusters: &[mem_adaptor_core::reports::ConflictCluster],
     ask: &mut dyn FnMut(&str) -> Result<Option<String>>,
 ) -> Result<Vec<Verdict>> {
     let mut decisions = Vec::new();
+    let mut open = Vec::new();
     for cluster in clusters {
         let Some(canonical_id) = cluster
             .candidates
@@ -291,26 +309,168 @@ fn collect_decisions(
             );
             continue;
         }
-        let prompt = format!(
-            "Cluster {} for {}: [1] keep {} [2] keep {} [3] leave unresolved: ",
-            cluster.cluster_id, canonical_id, bases[0], bases[1]
-        );
-        let answer = ask(&prompt)?;
-        match answer.as_deref().map(str::trim) {
-            Some("1") => decisions.push(Verdict::Keep {
-                cluster_id: cluster.cluster_id.clone(),
-                canonical_ids: vec![canonical_id],
-                bases: Some(vec![bases[0].clone()]),
-            }),
-            Some("2") => decisions.push(Verdict::Keep {
-                cluster_id: cluster.cluster_id.clone(),
-                canonical_ids: vec![canonical_id],
-                bases: Some(vec![bases[1].clone()]),
-            }),
-            _ => println!("Cluster {} left unresolved.", cluster.cluster_id),
+        open.push((cluster, canonical_id, bases));
+    }
+    if open.is_empty() {
+        return Ok(decisions);
+    }
+    let prompt = format!(
+        "{} open conflict cluster(s): [s] keep satellite for all / [h] keep home for all / \
+         [n] leave all unresolved / [p] decide each: ",
+        open.len()
+    );
+    match ask(&prompt)?.as_deref().map(str::trim) {
+        Some(bulk @ ("s" | "h")) => {
+            let side = if bulk == "s" { "satellite:" } else { "home:" };
+            for (cluster, canonical_id, bases) in &open {
+                let Some(basis) = bases.iter().find(|basis| basis.starts_with(side)) else {
+                    println!(
+                        "Cluster {}: no {side} basis; left unresolved.",
+                        cluster.cluster_id
+                    );
+                    continue;
+                };
+                decisions.push(Verdict::Keep {
+                    cluster_id: cluster.cluster_id.clone(),
+                    canonical_ids: vec![canonical_id.clone()],
+                    bases: Some(vec![basis.clone()]),
+                });
+            }
+            println!(
+                "{} cluster(s) resolved by keeping the {} value.",
+                decisions.len(),
+                side.trim_end_matches(':')
+            );
+        }
+        Some("n") => println!("{} cluster(s) left unresolved.", open.len()),
+        _ => {
+            for (cluster, canonical_id, bases) in &open {
+                let prompt = format!(
+                    "Cluster {} for {}: [1] keep {} [2] keep {} [3] leave unresolved: ",
+                    cluster.cluster_id, canonical_id, bases[0], bases[1]
+                );
+                let answer = ask(&prompt)?;
+                match answer.as_deref().map(str::trim) {
+                    Some("1") => decisions.push(Verdict::Keep {
+                        cluster_id: cluster.cluster_id.clone(),
+                        canonical_ids: vec![canonical_id.clone()],
+                        bases: Some(vec![bases[0].clone()]),
+                    }),
+                    Some("2") => decisions.push(Verdict::Keep {
+                        cluster_id: cluster.cluster_id.clone(),
+                        canonical_ids: vec![canonical_id.clone()],
+                        bases: Some(vec![bases[1].clone()]),
+                    }),
+                    _ => println!("Cluster {} left unresolved.", cluster.cluster_id),
+                }
+            }
         }
     }
     Ok(decisions)
+}
+
+/// Runs the read-only local view behind `mem-adaptor show`: prints both candidates of one plan entry's
+/// conflict (satellite source file vs home target file) with provenance and both sides' hashes, masking
+/// bodies with the gate rule set. Entries without a two-candidate cluster are explained, not guessed
+/// at; unreadable files are reported explicitly. Writes nothing, changes no target state, and never
+/// touches the plan (DEC-1 keeps bodies out of reports; this is the local channel instead).
+fn run_show(plan_path: &Path, canonical_id: &str) -> Result<i32> {
+    let report: PlanReport = serde_json::from_reader(
+        fs::File::open(plan_path)
+            .with_context(|| format!("cannot read plan report {}", plan_path.display()))?,
+    )
+    .with_context(|| format!("{} is not a valid plan report", plan_path.display()))?;
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.canonical_id == canonical_id)
+        .with_context(|| format!("canonical_id {canonical_id} is not an entry of this plan"))?;
+    let cluster = report.conflict_clusters.iter().find(|cluster| {
+        cluster.candidates.len() == 2
+            && cluster
+                .candidates
+                .iter()
+                .all(|candidate| candidate.canonical_id == canonical_id)
+    });
+    let Some(cluster) = cluster else {
+        println!(
+            "{canonical_id} has no two candidates in this plan: it is not in an open conflict, \
+             so there is nothing to compare."
+        );
+        println!("Disposition: {}", disposition_text(&entry.disposition));
+        println!("Source locator: {}", entry.source_locator);
+        return Ok(0);
+    };
+    println!(
+        "Conflict cluster {} for {canonical_id} (bodies masked, nothing written):",
+        cluster.cluster_id
+    );
+    let source_root = Path::new(&report.source.location);
+    let target_root = report
+        .targets
+        .iter()
+        .find(|target| target.id == entry.target)
+        .map(|target| Path::new(&target.location));
+    for candidate in &cluster.candidates {
+        match &candidate.origin {
+            CandidateOrigin::Satellite { id, label } => {
+                println!(
+                    "\n[satellite side] satellite {id}{}",
+                    label
+                        .as_deref()
+                        .map(|label| format!(" (label: {label})"))
+                        .unwrap_or_default()
+                );
+                let path = source_root.join(&entry.source_locator);
+                println!("file: {}", path.display());
+                print_candidate_body(&path, candidate);
+            }
+            CandidateOrigin::Home { path } => {
+                println!("\n[home side] home file {path}");
+                let Some(root) = &target_root else {
+                    println!(
+                        "body unavailable: target {} is not described by this plan, \
+                         so the home file cannot be attributed",
+                        entry.target
+                    );
+                    continue;
+                };
+                let file = root.join(path);
+                println!("file: {}", file.display());
+                print_candidate_body(&file, candidate);
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// Prints one candidate's hashes and its masked body, or an explicit unavailability line when the
+/// file cannot be read; the other side still prints, and no content is ever invented.
+fn print_candidate_body(path: &Path, candidate: &mem_adaptor_core::canonical::ConflictCandidate) {
+    println!("content_hash: {}", candidate.content_hash);
+    println!("record_hash: {}", candidate.record_hash);
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            println!("--- body (masked) ---");
+            for line in mem_adaptor_core::gate::mask(&text).lines() {
+                println!("| {line}");
+            }
+        }
+        Err(error) => println!("body unavailable: {} ({error})", path.display()),
+    }
+}
+
+/// Names a disposition for `show` output without depending on report internals beyond its status.
+fn disposition_text(disposition: &Disposition) -> String {
+    match disposition {
+        Disposition::Accepted => "accepted (to write this run)".into(),
+        Disposition::Transformed { changes } => {
+            format!("transformed ({} change(s))", changes.len())
+        }
+        Disposition::Omitted { reason } => format!("omitted ({reason:?})"),
+        Disposition::Rejected { rule } => format!("rejected ({rule})"),
+        Disposition::Unresolved { reason } => format!("unresolved ({reason:?})"),
+    }
 }
 
 /// Validates CLI paths/options and orchestrates init, plan, or explicitly approved apply.
@@ -770,6 +930,10 @@ fn run() -> Result<i32> {
             print_exit_explanation(failures, true);
             Ok(exit_code_for(failures))
         }
+        Command::Show { plan, canonical_id } => {
+            let plan_path = normalize_path(&plan)?;
+            run_show(&plan_path, &canonical_id)
+        }
     }
 }
 
@@ -1036,5 +1200,132 @@ mod tests {
         let mut foreign = cluster(&format!("sha256:{}", "f".repeat(64)));
         foreign.candidates[1].canonical_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
         assert!(collect_decisions(&[foreign], &mut ask).unwrap().is_empty());
+    }
+
+    /// Bulk answers settle every open cluster with a single question and no per-cluster prompts, and
+    /// still record one verdict per cluster bound to that cluster's id, so a bulk choice cannot leak
+    /// into another cluster's state (#43).
+    #[test]
+    fn bulk_answers_settle_every_open_cluster_at_once() {
+        let first = cluster(&format!("sha256:{}", "e".repeat(64)));
+        let mut second = cluster(&format!("sha256:{}", "f".repeat(64)));
+        for candidate in &mut second.candidates {
+            candidate.canonical_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        }
+        second.candidates[1].basis = "home:memories/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+        second.candidates[1].origin = CandidateOrigin::Home {
+            path: "memories/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.md".into(),
+        };
+        let clusters = vec![first, second];
+        for (answer, prefix) in [("s", "satellite:"), ("h", "home:")] {
+            let mut asks = 0;
+            let mut ask = |_prompt: &str| {
+                asks += 1;
+                Ok(Some(answer.to_string()))
+            };
+            let decisions = collect_decisions(&clusters, &mut ask).unwrap();
+            assert_eq!(
+                asks, 1,
+                "a bulk answer must not trigger per-cluster prompts"
+            );
+            assert_eq!(decisions.len(), 2, "one verdict per open cluster");
+            let ids: std::collections::HashSet<_> = decisions
+                .iter()
+                .map(|verdict| match verdict {
+                    Verdict::Keep { cluster_id, .. } => cluster_id.clone(),
+                    _ => panic!("bulk keep produces keep verdicts"),
+                })
+                .collect();
+            assert_eq!(ids.len(), 2, "each cluster is decided exactly once");
+            for verdict in &decisions {
+                let Verdict::Keep {
+                    cluster_id,
+                    canonical_ids,
+                    bases,
+                } = verdict
+                else {
+                    panic!("bulk keep produces keep verdicts")
+                };
+                let bases = bases.as_ref().expect("a side is named");
+                assert_eq!(bases.len(), 1);
+                assert!(bases[0].starts_with(prefix), "{bases:?}");
+                assert_eq!(canonical_ids.len(), 1);
+                assert!(
+                    canonical_ids[0] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        || canonical_ids[0] == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "each verdict names its own cluster's record"
+                );
+                let expected = if canonical_ids[0].starts_with('a') {
+                    &clusters[0]
+                } else {
+                    &clusters[1]
+                };
+                assert_eq!(cluster_id, &expected.cluster_id);
+            }
+        }
+        let mut asks = 0;
+        let mut ask = |_prompt: &str| {
+            asks += 1;
+            Ok(Some("n".to_string()))
+        };
+        assert!(collect_decisions(&clusters, &mut ask).unwrap().is_empty());
+        assert_eq!(asks, 1, "keep-unresolved-all asks nothing further");
+    }
+
+    /// "p" and any unrecognized bulk answer fall back to per-cluster asking, which itself leaves
+    /// unresolved whatever it cannot answer, so no path invents a verdict.
+    #[test]
+    fn unrecognized_bulk_answers_fall_back_to_per_cluster_asking() {
+        let clusters = vec![
+            cluster(&format!("sha256:{}", "e".repeat(64))),
+            cluster(&format!("sha256:{}", "f".repeat(64))),
+        ];
+        for answer in ["p", "x"] {
+            let mut asks = 0;
+            let mut ask = |_prompt: &str| {
+                asks += 1;
+                Ok(Some(answer.to_string()))
+            };
+            let decisions = collect_decisions(&clusters, &mut ask).unwrap();
+            assert_eq!(asks, 3, "the bulk prompt plus one prompt per cluster");
+            assert!(
+                decisions.is_empty(),
+                "an answer neither side recognizes decides nothing"
+            );
+        }
+        let mut closed = |_prompt: &str| Ok(None);
+        assert!(
+            collect_decisions(&clusters, &mut closed)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A two-candidate cluster without a home basis cannot answer keep-home; that cluster is reported
+    /// unresolved instead of guessing a side, while keep-satellite still settles it.
+    #[test]
+    fn bulk_keep_home_skips_clusters_without_a_home_basis() {
+        let mut shape = cluster(&format!("sha256:{}", "e".repeat(64)));
+        shape.candidates[1].basis = "satellite:other".into();
+        shape.candidates[1].origin = CandidateOrigin::Satellite {
+            id: "other".into(),
+            label: None,
+        };
+        let mut ask = |_prompt: &str| Ok(Some("h".to_string()));
+        assert!(
+            collect_decisions(&[shape.clone()], &mut ask)
+                .unwrap()
+                .is_empty()
+        );
+        let mut ask = |_prompt: &str| Ok(Some("s".to_string()));
+        let decisions = collect_decisions(&[shape], &mut ask).unwrap();
+        assert_eq!(decisions.len(), 1);
+        let Verdict::Keep { bases, .. } = &decisions[0] else {
+            panic!("keep-satellite produces a keep verdict")
+        };
+        assert_eq!(
+            bases.as_deref(),
+            Some(["satellite:direct".to_string()].as_slice())
+        );
     }
 }
