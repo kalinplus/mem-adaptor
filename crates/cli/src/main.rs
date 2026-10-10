@@ -938,23 +938,14 @@ fn run_discover(home_directory: &Path, extra: &[PathBuf]) -> Result<i32> {
         .map(PathBuf::from)
         .context("HOME is not set; cannot locate the built-in memory directories")?;
     let builtin = [user_home.join(".claude/projects"), user_home.join(".codex")];
-    for root in &builtin {
-        let Ok(children) = fs::read_dir(root) else {
-            continue;
-        };
+    // Claude Code nests each project's memory under ~/.claude/projects/<slug>/memory; Codex keeps its
+    // memories directly under ~/.codex/memories (docs/source-memory-formats.md).
+    if let Ok(children) = fs::read_dir(&builtin[0]) {
         for child in children.flatten() {
-            let memory = child.path().join("memory");
-            // An empty directory is the harness's empty slot, not a source; a dir whose only file yields
-            // zero records (e.g. MEMORY.md alone) still counts.
-            if memory.is_dir()
-                && fs::read_dir(&memory)
-                    .ok()
-                    .is_some_and(|mut list| list.next().is_some())
-            {
-                candidates.push(memory);
-            }
+            consider_candidate(&mut candidates, &child.path().join("memory"));
         }
     }
+    consider_candidate(&mut candidates, &builtin[1].join("memories"));
     for path in extra {
         let path = normalize_path(path)?;
         if path.is_dir() {
@@ -1007,6 +998,20 @@ fn run_discover(home_directory: &Path, extra: &[PathBuf]) -> Result<i32> {
         candidates.len()
     );
     Ok(0)
+}
+
+/// Adds a memory directory to the candidate list when it exists and is nonempty. An empty directory
+/// is the harness's empty slot and is skipped without noise, but an unreadable one is reported
+/// explicitly, matching the unreadable-source line in the listing itself.
+fn consider_candidate(candidates: &mut Vec<PathBuf>, directory: &Path) {
+    if !directory.is_dir() {
+        return;
+    }
+    match fs::read_dir(directory).map(|list| list.filter_map(Result::ok).count()) {
+        Ok(count) if count > 0 => candidates.push(directory.to_path_buf()),
+        Ok(_) => {}
+        Err(error) => println!("Unreadable: {} ({error})", directory.display()),
+    }
 }
 
 /// Loads a directory as a home or fails with the fix-it message; discovery and sync both refuse to
@@ -1109,7 +1114,7 @@ fn aggregate_sync_exit(codes: &[i32]) -> i32 {
     0
 }
 
-/// Validates CLI paths/options and orchestrates init, plan, or explicitly approved apply.
+/// Validates CLI paths/options and orchestrates init, plan, apply, discovery, and sync.
 /// Saves approval before engine recomputation and the receipt after engine completion; any error propagates.
 /// A saved approval is not a success receipt, and a later receipt-save error does not imply an unchanged target.
 fn run() -> Result<i32> {

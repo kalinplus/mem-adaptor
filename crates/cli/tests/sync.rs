@@ -231,8 +231,9 @@ fn sync_conflict_leaves_unresolved_and_continues() {
                 .is_ok_and(|text| text.contains("A one") && !text.contains("B one"))
         })
         .expect("satellite a's home file");
-    let before = fs::read(&conflict_file).unwrap();
     rewrite_body(&conflict_file, "Edited at home.\n");
+    // The byte baseline is the home-edited state: sync must leave exactly these bytes in place.
+    let before = fs::read(&conflict_file).unwrap();
     fs::write(first.join("a1.md"), "# A one edited by satellite\n").unwrap();
     fs::write(second.join("b2.md"), "# B two\n").unwrap();
 
@@ -253,7 +254,12 @@ fn sync_conflict_leaves_unresolved_and_continues() {
         after.contains("Edited at home.") && !after.contains("A one edited by satellite"),
         "the conflict stays unwritten: {after}"
     );
-    let _ = before;
+    // The conflicted record is byte-identical: neither body nor frontmatter was rewritten.
+    assert_eq!(
+        fs::read(&conflict_file).unwrap(),
+        before,
+        "conflicted home file must stay byte-identical"
+    );
     let index = fs::read_to_string(home.join("index.md")).unwrap();
     assert!(index.contains("B two"), "{index}");
     // Non-interactive runs never answer conflicts: every receipt stays verdict-free.
@@ -295,6 +301,10 @@ fn discover_lists_candidates_readonly_and_marks_registration() {
     let first = project_memory(&fake_home, "proj-a", &[("a1.md", "A one")]);
     project_memory(&fake_home, "proj-empty", &[]);
     fs::create_dir_all(fake_home.join(".claude/projects/proj-files-only")).unwrap();
+    // Codex keeps its memories directly under ~/.codex/memories, with no per-project nesting.
+    let codex = fake_home.join(".codex/memories");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("cx1.md"), "# Codex one\n").unwrap();
     assert!(
         cli(&["init", home.to_str().unwrap()], Some(&fake_home))
             .status
@@ -311,8 +321,19 @@ fn discover_lists_candidates_readonly_and_marks_registration() {
         "the nonempty candidate is listed: {stdout}"
     );
     assert!(
-        stdout.contains("— 1 records"),
-        "the record count comes from the reader: {stdout}"
+        stdout.contains(&format!("[unregistered] {}", codex.display())),
+        "the codex directory is a direct candidate: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 candidate(s): 0 registered, 1 unregistered; nothing was written.")
+            || stdout
+                .contains("2 candidate(s): 0 registered, 2 unregistered; nothing was written."),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("— 1 records").count(),
+        2,
+        "both the claude and codex candidates report one record: {stdout}"
     );
     assert!(
         !stdout.contains("proj-empty"),
@@ -321,10 +342,6 @@ fn discover_lists_candidates_readonly_and_marks_registration() {
     assert!(
         !stdout.contains("proj-files-only"),
         "a project without a memory/ directory is not a candidate: {stdout}"
-    );
-    assert!(
-        stdout.contains("1 candidate(s): 0 registered, 1 unregistered; nothing was written."),
-        "{stdout}"
     );
     assert_eq!(
         snapshot(&home),
@@ -347,8 +364,8 @@ fn discover_lists_candidates_readonly_and_marks_registration() {
         "registered candidates are marked: {stdout}"
     );
     assert!(
-        stdout.contains("1 candidate(s): 1 registered, 0 unregistered"),
-        "{stdout}"
+        stdout.contains("2 candidate(s): 1 registered, 1 unregistered"),
+        "the claude satellite is registered and the codex dir is not: {stdout}"
     );
 
     // An extra path that does not exist is reported and skipped, not treated as a candidate.
