@@ -195,7 +195,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -281,7 +281,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -362,7 +362,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -449,7 +449,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -532,7 +532,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -629,7 +629,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -669,7 +669,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -709,7 +709,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -749,7 +749,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -794,7 +794,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -906,5 +906,5 @@
     },
     "conflict_clusters": []
   },
-  "plan_digest": "sha256:7ca0de6a12a44f73999d91483ad91c7de95ced8bdf0c2259d9e983cd7bdcf1be"
+  "plan_digest": "sha256:aeeb550de04cb0dcfa84bf14768fb13cde818408929720da8d0b1795ee804453"
 }
