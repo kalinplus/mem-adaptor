@@ -860,6 +860,34 @@ fn home_lifecycle_produces_each_four_rule_outcome_once() {
     ]);
     assert_eq!(common::exit_code(&applied), common::EXIT_INCOMPLETE);
     assert_eq!(fs::read(&edited).unwrap(), before);
+    // The non-interactive path never answers the bulk question either: no verdict is recorded.
+    for receipt in walk_json(&home.join(".mem-adaptor/receipts")) {
+        assert_eq!(
+            receipt["verdicts"].as_array().map(Vec::len),
+            Some(0),
+            "a --yes run must not record cluster decisions: {receipt}"
+        );
+    }
+}
+
+/// Collects every JSON document under a receipts tree so assertions can check them all.
+fn walk_json(root: &Path) -> Vec<Value> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                found.push(serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap());
+            }
+        }
+    }
+    found
 }
 
 /// Checks #33: when the shared-basis receipt becomes unreadable after planning, apply refuses before any
