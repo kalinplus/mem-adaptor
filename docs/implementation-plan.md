@@ -290,7 +290,9 @@ OKF 家能被 reader-markdown 读回，且读回的 canonical 记录与写入前
 
 验收：用 tuistory（终端交互测试工具）跑一遍 `init` 与交互式 `apply`；非交互模式（stdin 非 TTY）下不卡住、按默认放行并标注来源。
 
-### M7 conformance 执行器与真实数据验收
+### M7 真实数据验收（conformance 执行器已裁决不实现）
+
+**状态（2026-10-10，用户裁决，#45 关闭）**：conformance 执行器不实现。Rust 测试已覆盖全部向量与反例（`schema_consistency.rs`）并重算过 `plan_digest`（快照测试）；同一作者的第二份实现挡不住共同盲区，对自身引擎的验证增量≈0。即便出现外部适配器作者，「用引擎跑一次模拟迁移验证行为」已足够，接受「引擎即规范」的现状；报告脱离签发者复核（审计/重放）暂无真实需求。铁律 8 与 DEC-7 保留为设计约束：若未来出现真实需求（schema 破坏性变更后要复核历史产物、对外发布 schema），按原方案再启。以下原始计划保留为历史资料。
 
 **conformance（Python，`conformance/`）**：只读 `schema/`、`vectors/` 和一次运行的产物目录，不 import 任何 Rust 代码。检查：
 
@@ -309,8 +311,8 @@ OKF 家能被 reader-markdown 读回，且读回的 canonical 记录与写入前
 - 你若能提供真 ChatGPT / Claude 导出包，核对 [source-memory-formats.md](source-memory-formats.md) 待核实清单 #1、#2、#4，
   核实后把对应 Reader 的 `evidence_level` 提为「实测」，并回写那份文档。
 
-D1 完成的标准：M0–M7 验收项全部通过；用真实的 Claude Code 记忆跑一次完整的「卫星 → 家」，
-计划报告人能读懂、回执全部 `verified`、conformance 执行器全绿。
+D1 完成的标准：用真实的 Claude Code 记忆跑一次完整的「卫星 → 家」，计划报告人能读懂、回执全部
+`verified`（2026-10-10 已达成，见 #44；conformance 全绿一项随 #45 裁决移除）。
 
 ## 5. 横切要求
 
