@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use mem_adaptor_core::canonical::{CandidateOrigin, Verdict};
 use mem_adaptor_core::engine::{BasisMismatch, Engine, SCHEMA_VERSION, timestamp, write_json_new};
 use mem_adaptor_core::governance::*;
-use mem_adaptor_core::plugins::Registry;
+use mem_adaptor_core::plugins::{Reader, Registry};
 use mem_adaptor_core::reports::{
     Disposition, PlanReport, SatelliteSpec, UnresolvedReason, Verification,
 };
@@ -94,6 +94,38 @@ enum Command {
         /// Canonical id of the record to inspect.
         #[arg(value_name = "CANONICAL_ID")]
         canonical_id: String,
+    },
+    /// Scan this machine's known memory locations and list candidates for a home; writes nothing.
+    ///
+    /// Built-in locations are the ones [source-memory-formats.md](docs/source-memory-formats.md) documents
+    /// for local harness memory (Claude Code `~/.claude/projects/*/memory`, Codex `~/.codex/memories`);
+    /// extra directories passed as arguments are scanned too. Output marks each candidate as a
+    /// registered satellite (with its ID and label) or unregistered, with the record count the
+    /// Markdown reader would see.
+    Discover {
+        /// Home whose satellite registry the candidates are checked against.
+        #[arg(value_name = "HOME")]
+        home: PathBuf,
+        /// Extra source directories to scan in addition to the built-in locations.
+        #[arg(value_name = "SOURCE")]
+        extra: Vec<PathBuf>,
+    },
+    /// Summarise every registered satellite into a home: serial plan-then-apply per satellite.
+    ///
+    /// Each satellite's plan is generated immediately before its own apply and never batched, so a
+    /// later satellite always reconciles against the shared artifacts the earlier one just wrote. A
+    /// satellite that fails (any nonzero class) is reported and the run continues with the rest; the
+    /// summary lists every satellite's outcome and the exit code is the most severe class seen
+    /// (input/IO 1 > stale basis 4 > incomplete 3 > clean 0). Approval semantics are identical to
+    /// `apply`: interactive confirmation per satellite by default, one explicit `--yes` for the whole
+    /// run when non-interactive — never a stored standing consent.
+    Sync {
+        /// Home whose registered satellites are summarised.
+        #[arg(value_name = "HOME")]
+        home: PathBuf,
+        /// Explicitly approve every satellite's plan without terminal prompts.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -473,7 +505,627 @@ fn disposition_text(disposition: &Disposition) -> String {
     }
 }
 
-/// Validates CLI paths/options and orchestrates init, plan, or explicitly approved apply.
+/// Plans one source into a target and files the report: resolves or issues the satellite in home
+/// mode, binds the home's history and shared basis, and never writes targets. Returns the run's exit
+/// code together with the filed report path, so a batch caller can feed the same freshly generated
+/// plan straight into apply; behavior matches the single `plan` command exactly.
+#[allow(clippy::too_many_arguments)]
+fn run_plan(
+    source: PathBuf,
+    to: String,
+    report: Option<PathBuf>,
+    previous_receipt: Option<PathBuf>,
+    secret_policy: Option<String>,
+    allow_rule: Vec<String>,
+    satellite: Option<String>,
+    label: Option<String>,
+) -> Result<(i32, PathBuf)> {
+    let source = normalize_path(&source)?;
+    let (writer, target) = to
+        .split_once(':')
+        .context("Target must be okf:<directory> or ump:<directory>")?;
+    ensure!(
+        matches!(writer, "okf" | "ump"),
+        "Target must be okf:<directory> or ump:<directory>"
+    );
+    let target = mem_adaptor_core::writer::normalize_root(Path::new(target)).context(
+        "[S5] Target path validation failed before target writes; target unchanged. Choose a regular target directory, not a linked root, and plan again",
+    )?;
+    // An okf target that carries a registry is a home; everything else stays a direct migration.
+    let home = crate::home::detect(writer, &target)
+        .map(|directory| crate::home::load(&directory))
+        .transpose()?;
+    // Reports default into the home's control directory (DEC-19), which lives inside the target;
+    // only that directory is exempt from the inside-a-target guard, as on the apply side.
+    let control = home
+        .as_ref()
+        .map(|home| crate::home::control_dir(&home.directory));
+    let report_path = match &report {
+        Some(report) => {
+            let path = normalize_path(report)?;
+            let in_control = control
+                .as_ref()
+                .is_some_and(|control| path.starts_with(control));
+            ensure!(
+                !path.starts_with(&source) && (!path.starts_with(&target) || in_control),
+                "Report must be outside source and target directories"
+            );
+            Some(path)
+        }
+        None => None,
+    };
+    ensure!(
+        !target.starts_with(&source) && !source.starts_with(&target),
+        "Source and target directories must not overlap"
+    );
+    ensure!(
+        report_path.is_some() || home.is_some(),
+        "--report is required for a direct migration; a home files its plans under <home>/.mem-adaptor/plans/"
+    );
+    if home.is_none() && writer == "okf" {
+        println!(
+            "NOTE: {} has no .mem-adaptor/config.toml, so this is a direct migration. \
+             Run `mem-adaptor init {}` to make it a home with a satellite registry.",
+            target.display(),
+            target.display()
+        );
+    }
+    let engine = engine(&[("home".into(), writer.into(), target.clone())])?;
+    let interactive = io::stdin().is_terminal();
+    let secret_action = secret_policy.as_deref().map(|action| {
+        if action == "block" {
+            GateAction::Block
+        } else {
+            GateAction::Pass
+        }
+    });
+    let previous_receipt = previous_receipt
+        .as_deref()
+        .map(normalize_path)
+        .transpose()?;
+    let mut ask = read_line as fn(&str) -> Result<String>;
+    let mut refuse =
+        crate::home::refuse_relocation as fn(&[RelocationCandidate]) -> Result<Option<String>>;
+    let (policy, spec) = match &home {
+        Some(home) => {
+            // The home's own configuration is the policy of record; explicit flags override this run
+            // only and are marked as a user choice, exactly as in direct mode (DEC-1).
+            let policy = crate::home::override_policy(
+                home.config.gate_policy.clone(),
+                secret_action,
+                allow_rule,
+            );
+            let mut choose = |suspects: &[RelocationCandidate]| {
+                crate::home::prompt_relocation(suspects, &mut read_answer)
+            };
+            let prompt: &mut dyn FnMut(&[RelocationCandidate]) -> Result<Option<String>> =
+                if interactive {
+                    &mut choose
+                } else {
+                    &mut refuse
+                };
+            let resolved = crate::home::resolve_satellite(
+                home,
+                &engine.registry,
+                &source,
+                satellite.as_deref(),
+                label.as_deref(),
+                prompt,
+            )
+            .context("Satellite resolution failed before target writes; target unchanged and the registry was not written")?;
+            println!(
+                "Satellite: {} ({}){}.",
+                resolved.spec.id,
+                resolved.spec.label.clone().unwrap_or_default(),
+                if resolved.issues {
+                    ", issued here and registered after an approved apply"
+                } else {
+                    ""
+                }
+            );
+            if resolved.rebind.is_some() {
+                println!(
+                    "Satellite {} is bound to another path; this path replaces that binding after an approved apply.",
+                    resolved.spec.id
+                );
+            }
+            (policy, Some(resolved.spec))
+        }
+        None => {
+            let (policy, saved) = crate::home::direct_policy(
+                crate::home::user_config_path(),
+                secret_action,
+                allow_rule,
+                interactive,
+                &mut ask,
+            )?;
+            if let Some(path) = saved {
+                println!("Saved the gate policy to {}.", path.display());
+            }
+            (
+                policy,
+                direct_satellite(satellite.as_deref(), label.as_deref())?,
+            )
+        }
+    };
+    let (report, report_path) = {
+        // Home mode takes its history from the home: the satellite's own newest receipt when no
+        // explicit --previous was given, plus the shared-artifact basis across all satellites
+        // (DEC-18 chains, DEC-19 shared products). Direct mode keeps explicit-only history.
+        let previous = match (&home, &spec) {
+            (Some(home), Some(spec)) => match &previous_receipt {
+                Some(path) => Some(path.clone()),
+                None => crate::home::satellite_previous(home, spec.id.as_str(), "home")?,
+            },
+            _ => previous_receipt.clone(),
+        };
+        let shared_basis = match &home {
+            Some(home) => crate::home::latest_shared_basis(home, "home", writer, &target)?,
+            None => None,
+        };
+        let report = match &spec {
+            Some(spec) => engine.plan_with_satellite(
+                &source,
+                policy,
+                spec,
+                previous.as_deref(),
+                shared_basis.as_deref(),
+            ),
+            None => engine.plan_with_previous(&source, policy, previous.as_deref()),
+        }
+        .context("Planning failed before target writes; target unchanged. Check the source, policy and any explicitly supplied previous receipt before planning again")?;
+        let path = match &report_path {
+            Some(path) => path.clone(),
+            None => {
+                let home = home.as_ref().expect("home mode owns the default plan path");
+                let satellite = spec.as_ref().expect("home mode requires a satellite");
+                let path = crate::home::plan_path(home, satellite.id.as_str(), &report.run_id);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                path
+            }
+        };
+        (report, path)
+    };
+    write_json_new(&report_path, &report)?;
+    println!("Plan: {} records; target unchanged.", report.entries.len());
+    println!("Plan filed: {}", report_path.display());
+    print_gate_summary(
+        &report.gate_policy,
+        report
+            .entries
+            .iter()
+            .flat_map(|entry| entry.sensitive_findings.iter()),
+    );
+    for warning in &report.warnings {
+        println!("WARNING: {warning}");
+    }
+    println!("WARNING: synthetic inputs only; real-data conformance is pending.");
+    print_plan_detail(&report);
+    let failures = failure_counts(
+        report.entries.iter().map(|entry| &entry.disposition),
+        report.entries.iter().map(|_| None),
+    );
+    print_exit_explanation(failures, false);
+    Ok((exit_code_for(failures), report_path))
+}
+
+/// Approves, recomputes, writes, and verifies one filed plan: the whole `apply` command as a
+/// function so a batch caller can execute each freshly generated plan exactly once, with identical
+/// guards, prompts, receipt filing, and exit-code semantics.
+fn run_apply(plan: PathBuf, receipt: Option<PathBuf>, yes: bool) -> Result<i32> {
+    let plan_path = normalize_path(&plan)?;
+    let report: PlanReport = (|| -> Result<_> {
+        serde_json::from_slice(&fs::read(&plan_path)?)
+            .map_err(|_| anyhow::anyhow!("Invalid plan report JSON or fields"))
+    })().context("[S7] Plan loading failed before target writes and before approval was saved; targets unchanged. Restore a valid plan or create a new one before proceeding")?;
+    ensure!(
+        report.schema_version == SCHEMA_VERSION,
+        "Unsupported plan schema version"
+    );
+    let targets: Vec<_> = report
+        .targets
+        .iter()
+        .map(|target| {
+            ensure!(
+                matches!(target.writer.as_str(), "okf" | "ump"),
+                "Unsupported target Writer"
+            );
+            Ok((
+                target.id.clone(),
+                target.writer.clone(),
+                // Keep the approved path literal: resolving a newly inserted parent link could approve another destination.
+                PathBuf::from(&target.location),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    // Constructor normalization must not change the destination serialized in the approved plan.
+    let engine = engine(&targets).context(
+        "[S7] Target setup failed before target writes and before approval was saved; this execution has not written targets. Inspect target paths and make a new plan",
+    )?;
+    // The plan's targets, home nature and satellite binding are all part of the approved execution
+    // basis, so a drift here is the same class as the engine's own basis checks (exit 4).
+    if !report.targets.iter().all(|target| {
+        engine
+            .registry
+            .writer(&target.id)
+            .is_ok_and(|writer| writer.location().to_string_lossy() == target.location)
+    }) {
+        return Err(anyhow::Error::new(BasisMismatch::new(
+            "[S7] Approved target path changed before target writes and before approval was saved; inspect target paths and make a new plan",
+        )));
+    }
+    let spec = report.source.satellite.clone();
+    let mut home = report
+        .targets
+        .iter()
+        .find_map(|target| crate::home::detect(&target.writer, Path::new(&target.location)))
+        .map(|directory| crate::home::load(&directory))
+        .transpose()?;
+    if !(home.is_none() || spec.is_some()) {
+        return Err(anyhow::Error::new(BasisMismatch::new(
+            "[S7] This plan carries no satellite identity but its target is now a home; home mode requires a satellite. Plan again against that home",
+        )));
+    }
+    if !(home.is_some()
+        || spec.is_none()
+        || !report.targets.iter().any(|target| target.writer == "okf"))
+    {
+        return Err(anyhow::Error::new(BasisMismatch::new(
+            "[S7] This plan carries a satellite identity but its okf target has no .mem-adaptor/config.toml; the home this plan was made against is missing. Restore the home configuration or plan again; applying it as a direct migration would strand this round's receipt outside the satellite's chain",
+        )));
+    }
+    if let (Some(home), Some(spec)) = (&home, &spec) {
+        // A registry binding that no longer matches the approved plan is also a stale basis.
+        crate::home::validate_plan_satellite(home, &engine.registry, spec, Path::new(&report.source.location))
+            .map_err(|error| {
+                anyhow::Error::new(BasisMismatch::new(format!(
+                    "[S7] Plan satellite validation failed before target writes and before approval was saved; this execution has not written targets. Inspect the home registry and the plan's source before proceeding: {error:#}"
+                )))
+            })?;
+    }
+    // Home mode files the receipt in the satellite's chain inside the home (DEC-19) after the engine
+    // returns it; an explicit --receipt overrides that location and keeps the original path guards.
+    let receipt_path = match &receipt {
+        Some(path) => Some(normalize_path(path)?),
+        None if home.is_some() => None,
+        None => Some(normalize_path(&plan_path.with_extension("receipt.json"))?),
+    };
+    if home.is_some() && receipt_path.is_some() {
+        println!(
+            "WARNING: --receipt overrides the home receipt chain, so relocation detection will not see this run."
+        );
+    }
+    let approval_path = plan_path.with_extension("approval.json");
+    // Reports default into the home's control directory (DEC-19), which lives inside the target;
+    // only that directory is exempt from the inside-a-target guard.
+    let control = home
+        .as_ref()
+        .map(|home| crate::home::control_dir(&home.directory));
+    for path in [&approval_path].into_iter().chain(receipt_path.as_ref()) {
+        ensure!(!path.exists(), "Output report already exists");
+        ensure!(
+            !path.starts_with(Path::new(&report.source.location)),
+            "Report cannot be inside the source"
+        );
+        ensure!(
+            targets.iter().all(|(_, _, target)| {
+                !path.starts_with(target)
+                    || control
+                        .as_ref()
+                        .is_some_and(|control| path.starts_with(control))
+            }),
+            "Report cannot be inside a target"
+        );
+    }
+    ensure!(
+        receipt_path.as_ref() != Some(&approval_path) && receipt_path.as_ref() != Some(&plan_path),
+        "Report paths must be distinct"
+    );
+    if !yes {
+        ensure!(
+            io::stdin().is_terminal(),
+            "Noninteractive apply requires explicit --yes"
+        );
+        print_plan_detail(&report);
+    }
+    // Interactive runs settle open conflicts here: the choices are recorded in this run's receipt
+    // and reused next run, and because they change what a later plan proposes, the write step for
+    // those entries still requires a new plan and a new approval (DEC-3, DEC-21 C).
+    let decisions = if interactive(yes, io::stdin().is_terminal()) {
+        let mut ask = read_answer;
+        collect_decisions(&report.conflict_clusters, &mut ask)?
+    } else {
+        Vec::new()
+    };
+    if interactive(yes, io::stdin().is_terminal()) {
+        print!(
+            "Approve {} records for writing? [y/N] ",
+            report.entries.len()
+        );
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        ensure!(
+            matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+            "Migration not approved"
+        );
+    }
+    let approval = ApprovalReceipt {
+        schema_version: SCHEMA_VERSION.into(),
+        receipt_id: format!("approval-{}", report.run_id),
+        plan_digest: report.plan_digest.clone(),
+        approved_at: timestamp()?,
+        backend: "local".into(),
+        approver: "local-user".into(),
+    };
+    // Record the user's approval of this basis, even if subsequent recomputation refuses execution.
+    write_json_new(&approval_path, &approval).context(
+        "[S7] Approval save failed before target writes; targets unchanged, approval may be incomplete. Inspect the report path and create a new plan before proceeding; do not overwrite existing artifacts",
+    )?;
+    let receipt = engine.apply_with_decisions(
+        &report,
+        &approval,
+        plan_path.to_string_lossy().into_owned(),
+        approval_path.to_string_lossy().into_owned(),
+        &decisions,
+    ).context("Apply failed; approval was saved but no reliable final receipt was saved. Follow the failed engine stage and inspect the target state before proceeding; do not blindly retry")?;
+    // Engine execution is complete; registry convergence and receipt persistence can still fail after
+    // target writes, so each step reports that the target may already have changed.
+    if let Some(home) = &mut home {
+        crate::home::converge_registry(
+            home,
+            &engine.registry,
+            spec.as_ref().expect("home mode requires a satellite"),
+            Path::new(&report.source.location),
+        )
+        .context(
+            "[S9] Home registry convergence failed after engine execution; targets may already have changed and approval was saved, and the satellite may be unregistered. Inspect the home registry before deciding how to proceed; do not blindly retry",
+        )?;
+    }
+    match &receipt_path {
+        Some(path) => write_json_new(path, &receipt).context(
+            "[S9] Final receipt save failed after engine execution; targets may already have changed and approval was saved. No reliable final receipt was saved. Inspect targets and report paths before deciding how to proceed; do not blindly retry",
+        )?,
+        None => {
+            let saved = crate::home::file_receipts(
+                home.as_ref().expect("home mode requires a home"),
+                std::slice::from_ref(&receipt),
+            )
+            .context(
+                "[S9] Home receipt save failed after engine execution and after registry convergence; targets may already have changed and approval was saved. Inspect the home receipts directory before deciding how to proceed; do not blindly retry",
+            )?;
+            for path in saved {
+                println!("Receipt filed: {}", path.display());
+            }
+        }
+    }
+    println!("Receipt: {} records.", receipt.entries.len());
+    if !decisions.is_empty() {
+        println!(
+            "{} cluster decisions were recorded in this receipt; they change what the next plan proposes, so re-run plan and apply to write the decided values.",
+            decisions.len()
+        );
+    }
+    print_gate_summary(
+        &receipt.gate_policy,
+        receipt
+            .entries
+            .iter()
+            .flat_map(|entry| entry.sensitive_findings.iter()),
+    );
+    let failures = failure_counts(
+        receipt.entries.iter().map(|entry| &entry.disposition),
+        receipt
+            .entries
+            .iter()
+            .map(|entry| entry.verification.as_ref()),
+    );
+    print_exit_explanation(failures, true);
+    Ok(exit_code_for(failures))
+}
+
+/// Scans the built-in local memory locations plus caller-given directories and lists each candidate
+/// for a home: its record count as the Markdown reader sees it, and whether the home's registry already
+/// binds it. Read-only end to end: nothing in the home or any scanned directory changes, so it is safe
+/// to run at any time as the first step of deciding what to summarise (#47).
+fn run_discover(home_directory: &Path, extra: &[PathBuf]) -> Result<i32> {
+    let home = load_home(home_directory)?;
+    let entries = home.config.satellites.clone().unwrap_or_default();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let user_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set; cannot locate the built-in memory directories")?;
+    // Claude Code nests each project's memory under ~/.claude/projects/<slug>/memory; Codex keeps its
+    // memories directly under $CODEX_HOME/memories (default ~/.codex/memories;
+    // docs/source-memory-formats.md).
+    let claude_projects = user_home.join(".claude/projects");
+    if claude_projects.is_dir() {
+        match fs::read_dir(&claude_projects) {
+            Ok(children) => {
+                for child in children.flatten() {
+                    consider_candidate(&mut candidates, &child.path().join("memory"));
+                }
+            }
+            Err(error) => {
+                println!("Unreadable: {} ({error})", claude_projects.display())
+            }
+        }
+    }
+    let codex_root = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| user_home.join(".codex"));
+    consider_candidate(&mut candidates, &codex_root.join("memories"));
+    for path in extra {
+        let path = normalize_path(path)?;
+        if path.is_dir() {
+            candidates.push(path);
+        } else {
+            println!("Skipped {}: not an existing directory.", path.display());
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    let reader = MarkdownReader;
+    let mut registered = 0;
+    let mut unregistered = 0;
+    println!("Candidates for {}:", home.directory.display());
+    for candidate in &candidates {
+        // The registry binds canonical path strings, so compare the canonical form (read-only lookup).
+        let canonical = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        let binding =
+            mem_adaptor_core::satellite::find_by_path(&entries, &canonical.to_string_lossy());
+        let records = (|| -> Result<String> {
+            let source = mem_adaptor_core::source::load_source(&canonical)?;
+            let claims = reader.claim(&source.files);
+            let mut count = 0usize;
+            for claim in &claims {
+                count += reader.read(claim, &source)?.records.len();
+            }
+            Ok(format!("{count} records"))
+        })()
+        .unwrap_or_else(|error: anyhow::Error| format!("unreadable: {error:#}"));
+        match binding {
+            Some(entry) => {
+                registered += 1;
+                println!(
+                    "  [satellite {} ({})] {} — {records}",
+                    entry.id,
+                    entry.label,
+                    candidate.display()
+                );
+            }
+            None => {
+                unregistered += 1;
+                println!("  [unregistered] {} — {records}", candidate.display());
+            }
+        }
+    }
+    println!(
+        "{} candidate(s): {registered} registered, {unregistered} unregistered; nothing was written.",
+        candidates.len()
+    );
+    Ok(0)
+}
+
+/// Adds a memory directory to the candidate list when it exists and is nonempty. An empty directory
+/// is the harness's empty slot and is skipped without noise, but an unreadable one is reported
+/// explicitly, matching the unreadable-source line in the listing itself.
+fn consider_candidate(candidates: &mut Vec<PathBuf>, directory: &Path) {
+    if !directory.is_dir() {
+        return;
+    }
+    match fs::read_dir(directory).map(|list| list.filter_map(Result::ok).count()) {
+        Ok(count) if count > 0 => candidates.push(directory.to_path_buf()),
+        Ok(_) => {}
+        Err(error) => println!("Unreadable: {} ({error})", directory.display()),
+    }
+}
+
+/// Loads a directory as a home or fails with the fix-it message; discovery and sync both refuse to
+/// guess at a directory that is not one.
+fn load_home(home_directory: &Path) -> Result<crate::home::Home> {
+    let directory = normalize_path(home_directory)?;
+    let Some(found) = crate::home::detect("okf", &directory) else {
+        anyhow::bail!(
+            "{} has no .mem-adaptor/config.toml; run `mem-adaptor init {}` first",
+            directory.display(),
+            directory.display()
+        );
+    };
+    crate::home::load(&found)
+}
+
+/// Summarises every registered directory satellite into a home: serial plan-then-apply per satellite,
+/// each plan consumed by its own apply before the next plan is generated (#47). A satellite that fails
+/// any class is reported and the loop continues, because satellites are independent — a failing one has
+/// already refused safely, and the next plan reconciles against whatever the earlier applies wrote.
+fn run_sync(home_directory: &Path, yes: bool) -> Result<i32> {
+    let home = load_home(home_directory)?;
+    let target = format!("okf:{}", home.directory.display());
+    let entries = home.config.satellites.clone().unwrap_or_default();
+    let directory_bound: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.path.is_some())
+        .collect();
+    for entry in entries.iter().filter(|entry| entry.path.is_none()) {
+        println!(
+            "Satellite {} ({}): no bound source path; skipped.",
+            entry.id, entry.label
+        );
+    }
+    if directory_bound.is_empty() {
+        println!("No registered satellites to summarise.");
+        return Ok(0);
+    }
+    let mut codes = Vec::new();
+    for entry in &directory_bound {
+        let source = PathBuf::from(entry.path.as_ref().expect("filtered to bound paths"));
+        println!(
+            "\n=== Satellite {} ({}) : {} ===",
+            entry.id,
+            entry.label,
+            source.display()
+        );
+        let code = match run_plan(
+            source.clone(),
+            target.clone(),
+            None,
+            None,
+            None,
+            Vec::new(),
+            Some(entry.id.clone()),
+            None,
+        ) {
+            Ok((_plan_exit, plan_path)) => match run_apply(plan_path, None, yes) {
+                Ok(apply_exit) => apply_exit,
+                Err(error) => {
+                    report_sync_error(&error);
+                    exit_code_for_error(&error)
+                }
+            },
+            Err(error) => {
+                report_sync_error(&error);
+                exit_code_for_error(&error)
+            }
+        };
+        println!("Satellite {} result: exit {code}.", entry.id);
+        codes.push(code);
+    }
+    println!("\nSync summary: {} satellite(s).", codes.len());
+    for (entry, code) in directory_bound.iter().zip(&codes) {
+        println!("  {} ({}): exit {code}", entry.id, entry.label);
+    }
+    let overall = aggregate_sync_exit(&codes);
+    println!("Sync exit {overall}.");
+    Ok(overall)
+}
+
+/// Prints one satellite's failure for the sync log the same way `main` presents errors: masked, with
+/// the chain of stage contexts, so a failed satellite is diagnosable from the sync output alone.
+fn report_sync_error(error: &anyhow::Error) {
+    eprintln!(
+        "Error: {}",
+        mem_adaptor_core::gate::mask(&format!("{error:#}"))
+    );
+}
+
+/// Aggregates per-satellite exit codes into one sync exit code: the most severe class seen, where an
+/// input/IO failure (1) outweighs a stale basis (4), which outweighs an incomplete run (3). Usage
+/// errors never reach this function, and clean runs stay 0.
+fn aggregate_sync_exit(codes: &[i32]) -> i32 {
+    for code in [1, 4, 3] {
+        if codes.contains(&code) {
+            return code;
+        }
+    }
+    0
+}
+
+/// Validates CLI paths/options and orchestrates init, plan, apply, discovery, and sync.
 /// Saves approval before engine recomputation and the receipt after engine completion; any error propagates.
 /// A saved approval is not a success receipt, and a later receipt-save error does not imply an unchanged target.
 fn run() -> Result<i32> {
@@ -526,414 +1178,24 @@ fn run() -> Result<i32> {
             allow_rule,
             satellite,
             label,
-        } => {
-            let source = normalize_path(&source)?;
-            let (writer, target) = to
-                .split_once(':')
-                .context("Target must be okf:<directory> or ump:<directory>")?;
-            ensure!(
-                matches!(writer, "okf" | "ump"),
-                "Target must be okf:<directory> or ump:<directory>"
-            );
-            let target = mem_adaptor_core::writer::normalize_root(Path::new(target)).context(
-                "[S5] Target path validation failed before target writes; target unchanged. Choose a regular target directory, not a linked root, and plan again",
-            )?;
-            // An okf target that carries a registry is a home; everything else stays a direct migration.
-            let home = crate::home::detect(writer, &target)
-                .map(|directory| crate::home::load(&directory))
-                .transpose()?;
-            // Reports default into the home's control directory (DEC-19), which lives inside the target;
-            // only that directory is exempt from the inside-a-target guard, as on the apply side.
-            let control = home
-                .as_ref()
-                .map(|home| crate::home::control_dir(&home.directory));
-            let report_path = match &report {
-                Some(report) => {
-                    let path = normalize_path(report)?;
-                    let in_control = control
-                        .as_ref()
-                        .is_some_and(|control| path.starts_with(control));
-                    ensure!(
-                        !path.starts_with(&source) && (!path.starts_with(&target) || in_control),
-                        "Report must be outside source and target directories"
-                    );
-                    Some(path)
-                }
-                None => None,
-            };
-            ensure!(
-                !target.starts_with(&source) && !source.starts_with(&target),
-                "Source and target directories must not overlap"
-            );
-            ensure!(
-                report_path.is_some() || home.is_some(),
-                "--report is required for a direct migration; a home files its plans under <home>/.mem-adaptor/plans/"
-            );
-            if home.is_none() && writer == "okf" {
-                println!(
-                    "NOTE: {} has no .mem-adaptor/config.toml, so this is a direct migration. \
-                     Run `mem-adaptor init {}` to make it a home with a satellite registry.",
-                    target.display(),
-                    target.display()
-                );
-            }
-            let engine = engine(&[("home".into(), writer.into(), target.clone())])?;
-            let interactive = io::stdin().is_terminal();
-            let secret_action = secret_policy.as_deref().map(|action| {
-                if action == "block" {
-                    GateAction::Block
-                } else {
-                    GateAction::Pass
-                }
-            });
-            let previous_receipt = previous_receipt
-                .as_deref()
-                .map(normalize_path)
-                .transpose()?;
-            let mut ask = read_line as fn(&str) -> Result<String>;
-            let mut refuse = crate::home::refuse_relocation
-                as fn(&[RelocationCandidate]) -> Result<Option<String>>;
-            let (policy, spec) = match &home {
-                Some(home) => {
-                    // The home's own configuration is the policy of record; explicit flags override this run
-                    // only and are marked as a user choice, exactly as in direct mode (DEC-1).
-                    let policy = crate::home::override_policy(
-                        home.config.gate_policy.clone(),
-                        secret_action,
-                        allow_rule,
-                    );
-                    let mut choose = |suspects: &[RelocationCandidate]| {
-                        crate::home::prompt_relocation(suspects, &mut read_answer)
-                    };
-                    let prompt: &mut dyn FnMut(&[RelocationCandidate]) -> Result<Option<String>> =
-                        if interactive {
-                            &mut choose
-                        } else {
-                            &mut refuse
-                        };
-                    let resolved = crate::home::resolve_satellite(
-                        home,
-                        &engine.registry,
-                        &source,
-                        satellite.as_deref(),
-                        label.as_deref(),
-                        prompt,
-                    )
-                    .context("Satellite resolution failed before target writes; target unchanged and the registry was not written")?;
-                    println!(
-                        "Satellite: {} ({}){}.",
-                        resolved.spec.id,
-                        resolved.spec.label.clone().unwrap_or_default(),
-                        if resolved.issues {
-                            ", issued here and registered after an approved apply"
-                        } else {
-                            ""
-                        }
-                    );
-                    if resolved.rebind.is_some() {
-                        println!(
-                            "Satellite {} is bound to another path; this path replaces that binding after an approved apply.",
-                            resolved.spec.id
-                        );
-                    }
-                    (policy, Some(resolved.spec))
-                }
-                None => {
-                    let (policy, saved) = crate::home::direct_policy(
-                        crate::home::user_config_path(),
-                        secret_action,
-                        allow_rule,
-                        interactive,
-                        &mut ask,
-                    )?;
-                    if let Some(path) = saved {
-                        println!("Saved the gate policy to {}.", path.display());
-                    }
-                    (
-                        policy,
-                        direct_satellite(satellite.as_deref(), label.as_deref())?,
-                    )
-                }
-            };
-            let (report, report_path) = {
-                // Home mode takes its history from the home: the satellite's own newest receipt when no
-                // explicit --previous was given, plus the shared-artifact basis across all satellites
-                // (DEC-18 chains, DEC-19 shared products). Direct mode keeps explicit-only history.
-                let previous = match (&home, &spec) {
-                    (Some(home), Some(spec)) => match &previous_receipt {
-                        Some(path) => Some(path.clone()),
-                        None => crate::home::satellite_previous(home, spec.id.as_str(), "home")?,
-                    },
-                    _ => previous_receipt.clone(),
-                };
-                let shared_basis = match &home {
-                    Some(home) => crate::home::latest_shared_basis(home, "home", writer, &target)?,
-                    None => None,
-                };
-                let report = match &spec {
-                    Some(spec) => engine.plan_with_satellite(
-                        &source,
-                        policy,
-                        spec,
-                        previous.as_deref(),
-                        shared_basis.as_deref(),
-                    ),
-                    None => engine.plan_with_previous(&source, policy, previous.as_deref()),
-                }
-                .context("Planning failed before target writes; target unchanged. Check the source, policy and any explicitly supplied previous receipt before planning again")?;
-                let path = match &report_path {
-                    Some(path) => path.clone(),
-                    None => {
-                        let home = home.as_ref().expect("home mode owns the default plan path");
-                        let satellite = spec.as_ref().expect("home mode requires a satellite");
-                        let path =
-                            crate::home::plan_path(home, satellite.id.as_str(), &report.run_id);
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        path
-                    }
-                };
-                (report, path)
-            };
-            write_json_new(&report_path, &report)?;
-            println!("Plan: {} records; target unchanged.", report.entries.len());
-            println!("Plan filed: {}", report_path.display());
-            print_gate_summary(
-                &report.gate_policy,
-                report
-                    .entries
-                    .iter()
-                    .flat_map(|entry| entry.sensitive_findings.iter()),
-            );
-            for warning in &report.warnings {
-                println!("WARNING: {warning}");
-            }
-            println!("WARNING: synthetic inputs only; real-data conformance is pending.");
-            print_plan_detail(&report);
-            let failures = failure_counts(
-                report.entries.iter().map(|entry| &entry.disposition),
-                report.entries.iter().map(|_| None),
-            );
-            print_exit_explanation(failures, false);
-            Ok(exit_code_for(failures))
-        }
-        Command::Apply { plan, receipt, yes } => {
-            let plan_path = normalize_path(&plan)?;
-            let report: PlanReport = (|| -> Result<_> {
-                serde_json::from_slice(&fs::read(&plan_path)?)
-                    .map_err(|_| anyhow::anyhow!("Invalid plan report JSON or fields"))
-            })().context("[S7] Plan loading failed before target writes and before approval was saved; targets unchanged. Restore a valid plan or create a new one before proceeding")?;
-            ensure!(
-                report.schema_version == SCHEMA_VERSION,
-                "Unsupported plan schema version"
-            );
-            let targets: Vec<_> = report
-                .targets
-                .iter()
-                .map(|target| {
-                    ensure!(
-                        matches!(target.writer.as_str(), "okf" | "ump"),
-                        "Unsupported target Writer"
-                    );
-                    Ok((
-                        target.id.clone(),
-                        target.writer.clone(),
-                        // Keep the approved path literal: resolving a newly inserted parent link could approve another destination.
-                        PathBuf::from(&target.location),
-                    ))
-                })
-                .collect::<Result<_>>()?;
-            // Constructor normalization must not change the destination serialized in the approved plan.
-            let engine = engine(&targets).context(
-                "[S7] Target setup failed before target writes and before approval was saved; this execution has not written targets. Inspect target paths and make a new plan",
-            )?;
-            // The plan's targets, home nature and satellite binding are all part of the approved execution
-            // basis, so a drift here is the same class as the engine's own basis checks (exit 4).
-            if !report.targets.iter().all(|target| {
-                engine
-                    .registry
-                    .writer(&target.id)
-                    .is_ok_and(|writer| writer.location().to_string_lossy() == target.location)
-            }) {
-                return Err(anyhow::Error::new(BasisMismatch::new(
-                    "[S7] Approved target path changed before target writes and before approval was saved; inspect target paths and make a new plan",
-                )));
-            }
-            let spec = report.source.satellite.clone();
-            let mut home = report
-                .targets
-                .iter()
-                .find_map(|target| crate::home::detect(&target.writer, Path::new(&target.location)))
-                .map(|directory| crate::home::load(&directory))
-                .transpose()?;
-            if !(home.is_none() || spec.is_some()) {
-                return Err(anyhow::Error::new(BasisMismatch::new(
-                    "[S7] This plan carries no satellite identity but its target is now a home; home mode requires a satellite. Plan again against that home",
-                )));
-            }
-            if !(home.is_some()
-                || spec.is_none()
-                || !report.targets.iter().any(|target| target.writer == "okf"))
-            {
-                return Err(anyhow::Error::new(BasisMismatch::new(
-                    "[S7] This plan carries a satellite identity but its okf target has no .mem-adaptor/config.toml; the home this plan was made against is missing. Restore the home configuration or plan again; applying it as a direct migration would strand this round's receipt outside the satellite's chain",
-                )));
-            }
-            if let (Some(home), Some(spec)) = (&home, &spec) {
-                // A registry binding that no longer matches the approved plan is also a stale basis.
-                crate::home::validate_plan_satellite(home, &engine.registry, spec, Path::new(&report.source.location))
-                    .map_err(|error| {
-                        anyhow::Error::new(BasisMismatch::new(format!(
-                            "[S7] Plan satellite validation failed before target writes and before approval was saved; this execution has not written targets. Inspect the home registry and the plan's source before proceeding: {error:#}"
-                        )))
-                    })?;
-            }
-            // Home mode files the receipt in the satellite's chain inside the home (DEC-19) after the engine
-            // returns it; an explicit --receipt overrides that location and keeps the original path guards.
-            let receipt_path = match &receipt {
-                Some(path) => Some(normalize_path(path)?),
-                None if home.is_some() => None,
-                None => Some(normalize_path(&plan_path.with_extension("receipt.json"))?),
-            };
-            if home.is_some() && receipt_path.is_some() {
-                println!(
-                    "WARNING: --receipt overrides the home receipt chain, so relocation detection will not see this run."
-                );
-            }
-            let approval_path = plan_path.with_extension("approval.json");
-            // Reports default into the home's control directory (DEC-19), which lives inside the target;
-            // only that directory is exempt from the inside-a-target guard.
-            let control = home
-                .as_ref()
-                .map(|home| crate::home::control_dir(&home.directory));
-            for path in [&approval_path].into_iter().chain(receipt_path.as_ref()) {
-                ensure!(!path.exists(), "Output report already exists");
-                ensure!(
-                    !path.starts_with(Path::new(&report.source.location)),
-                    "Report cannot be inside the source"
-                );
-                ensure!(
-                    targets.iter().all(|(_, _, target)| {
-                        !path.starts_with(target)
-                            || control
-                                .as_ref()
-                                .is_some_and(|control| path.starts_with(control))
-                    }),
-                    "Report cannot be inside a target"
-                );
-            }
-            ensure!(
-                receipt_path.as_ref() != Some(&approval_path)
-                    && receipt_path.as_ref() != Some(&plan_path),
-                "Report paths must be distinct"
-            );
-            if !yes {
-                ensure!(
-                    io::stdin().is_terminal(),
-                    "Noninteractive apply requires explicit --yes"
-                );
-                print_plan_detail(&report);
-            }
-            // Interactive runs settle open conflicts here: the choices are recorded in this run's receipt
-            // and reused next run, and because they change what a later plan proposes, the write step for
-            // those entries still requires a new plan and a new approval (DEC-3, DEC-21 C).
-            let decisions = if interactive(yes, io::stdin().is_terminal()) {
-                let mut ask = read_answer;
-                collect_decisions(&report.conflict_clusters, &mut ask)?
-            } else {
-                Vec::new()
-            };
-            if interactive(yes, io::stdin().is_terminal()) {
-                print!(
-                    "Approve {} records for writing? [y/N] ",
-                    report.entries.len()
-                );
-                io::stdout().flush()?;
-                let mut answer = String::new();
-                io::stdin().read_line(&mut answer)?;
-                ensure!(
-                    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
-                    "Migration not approved"
-                );
-            }
-            let approval = ApprovalReceipt {
-                schema_version: SCHEMA_VERSION.into(),
-                receipt_id: format!("approval-{}", report.run_id),
-                plan_digest: report.plan_digest.clone(),
-                approved_at: timestamp()?,
-                backend: "local".into(),
-                approver: "local-user".into(),
-            };
-            // Record the user's approval of this basis, even if subsequent recomputation refuses execution.
-            write_json_new(&approval_path, &approval).context(
-                "[S7] Approval save failed before target writes; targets unchanged, approval may be incomplete. Inspect the report path and create a new plan before proceeding; do not overwrite existing artifacts",
-            )?;
-            let receipt = engine.apply_with_decisions(
-                &report,
-                &approval,
-                plan_path.to_string_lossy().into_owned(),
-                approval_path.to_string_lossy().into_owned(),
-                &decisions,
-            ).context("Apply failed; approval was saved but no reliable final receipt was saved. Follow the failed engine stage and inspect the target state before proceeding; do not blindly retry")?;
-            // Engine execution is complete; registry convergence and receipt persistence can still fail after
-            // target writes, so each step reports that the target may already have changed.
-            if let Some(home) = &mut home {
-                crate::home::converge_registry(
-                    home,
-                    &engine.registry,
-                    spec.as_ref().expect("home mode requires a satellite"),
-                    Path::new(&report.source.location),
-                )
-                .context(
-                    "[S9] Home registry convergence failed after engine execution; targets may already have changed and approval was saved, and the satellite may be unregistered. Inspect the home registry before deciding how to proceed; do not blindly retry",
-                )?;
-            }
-            match &receipt_path {
-                Some(path) => write_json_new(path, &receipt).context(
-                    "[S9] Final receipt save failed after engine execution; targets may already have changed and approval was saved. No reliable final receipt was saved. Inspect targets and report paths before deciding how to proceed; do not blindly retry",
-                )?,
-                None => {
-                    let saved = crate::home::file_receipts(
-                        home.as_ref().expect("home mode requires a home"),
-                        std::slice::from_ref(&receipt),
-                    )
-                    .context(
-                        "[S9] Home receipt save failed after engine execution and after registry convergence; targets may already have changed and approval was saved. Inspect the home receipts directory before deciding how to proceed; do not blindly retry",
-                    )?;
-                    for path in saved {
-                        println!("Receipt filed: {}", path.display());
-                    }
-                }
-            }
-            println!("Receipt: {} records.", receipt.entries.len());
-            if !decisions.is_empty() {
-                println!(
-                    "{} cluster decisions were recorded in this receipt; they change what the next plan proposes, so re-run plan and apply to write the decided values.",
-                    decisions.len()
-                );
-            }
-            print_gate_summary(
-                &receipt.gate_policy,
-                receipt
-                    .entries
-                    .iter()
-                    .flat_map(|entry| entry.sensitive_findings.iter()),
-            );
-            let failures = failure_counts(
-                receipt.entries.iter().map(|entry| &entry.disposition),
-                receipt
-                    .entries
-                    .iter()
-                    .map(|entry| entry.verification.as_ref()),
-            );
-            print_exit_explanation(failures, true);
-            Ok(exit_code_for(failures))
-        }
+        } => run_plan(
+            source,
+            to,
+            report,
+            previous_receipt,
+            secret_policy,
+            allow_rule,
+            satellite,
+            label,
+        )
+        .map(|(code, _filed)| code),
+        Command::Apply { plan, receipt, yes } => run_apply(plan, receipt, yes),
         Command::Show { plan, canonical_id } => {
             let plan_path = normalize_path(&plan)?;
             run_show(&plan_path, &canonical_id)
         }
+        Command::Discover { home, extra } => run_discover(&home, &extra),
+        Command::Sync { home, yes } => run_sync(&home, yes),
     }
 }
 
@@ -1299,6 +1561,17 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// The aggregate exit rule: the most severe class seen wins, 1 > 4 > 3 > 0 (#47).
+    #[test]
+    fn aggregate_sync_exit_takes_the_most_severe_class() {
+        assert_eq!(aggregate_sync_exit(&[]), 0);
+        assert_eq!(aggregate_sync_exit(&[0, 0]), 0);
+        assert_eq!(aggregate_sync_exit(&[0, 3]), 3);
+        assert_eq!(aggregate_sync_exit(&[3, 4, 0]), 4);
+        assert_eq!(aggregate_sync_exit(&[4, 1]), 1);
+        assert_eq!(aggregate_sync_exit(&[0, 3, 1, 4]), 1);
     }
 
     /// A two-candidate cluster without a home basis cannot answer keep-home; that cluster is reported
