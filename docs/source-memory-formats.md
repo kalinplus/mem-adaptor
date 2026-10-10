@@ -85,7 +85,7 @@
 - [oh-dsh commit 不加 AI 署名](ohdsh-no-ai-attribution.md) — 无 Assisted-by trailer、body 简洁；派发 prompt 要显式禁止
 ```
 
-topic 文件的 frontmatter（`type` 实测见过 `project` 和 `feedback`）：
+topic 文件的 frontmatter 有两种变体（同一台机器上都实测过）：嵌套式（`metadata.` 块，`type` 实测见过 `project`、`feedback`、`user`）与**扁平式**（顶层 `name`/`description`/`type`，无 `metadata:` 块，`type` 实测见过 `reference`、`feedback`、`project`；有的目录整目录都是这种）：
 
 ```yaml
 ---
@@ -102,6 +102,14 @@ metadata:
 - `modified` 由 harness 在写入时补，只对带 frontmatter 的文件生效 —— 所以有的文件没有这个字段。
 - `originSessionId` 是唯一能指回会话的 provenance 字段，但对应的 jsonl 可能已被清理。
 - 已知 bug 面：`autoMemoryDirectory` 在部分 settings scope 下不生效；系统提示词里的路径说明与实际加载路径不一致（GitHub issues #36973 / #42682 / #46701）。
+
+**实测迁移（2026-10-10，Issue #44）**：四个目录（含整目录扁平式 frontmatter 的变体）经 markdown Reader 进临时 OKF 家全链路验收，32 条记录：
+
+- 正文逐字节一致；`name`/`description` 经 `source_extra` 完整保留进 OKF 的 `mem_adaptor:` 扩展块，回读可复原；`metadata.modified` → `sources[0].last_modified` 逐条一致，没有该字段的文件（扁平式或缺这个键）不捏造时间。
+- `MEMORY.md` 被 Reader 登记（哈希、字节数）但**不作为记录迁移**（Claude Code 的索引是从 topic 文件派生的展示层，迁了就重复）；报告里状态是 `registered_only`、`layer: index`，不是静默跳过。
+- 两种变体的 `type` 都落 `source_kind`，但源指针不同：嵌套式读 `/frontmatter/metadata/type`（且需 `metadata.node_type: memory` 才认作 Claude Code；否则该 `type` 不落 `source_kind`，只留在 `source_extra`/`unmapped`），扁平式读 `/frontmatter/type`，两者 canonical 目标都是 `/source_kind`。分类三档：`project`/`tool` 落 `explicit_standard`，`profile`/`preference`/`instruction` 落 DNA 桶，其余（如 `feedback`、`user`）落 `unknown_standard`：`evidence_level: inferred` 并列入 `unmapped`（语义未解释）。完全无 `type` 的文件不设 `source_kind`（`evidence_level` 同样落 `inferred`）——不按文件名或正文猜类别（[reader.rs](../crates/core/src/reader.rs) 的 classify 契约）。
+- OKF `title` 规则会剥掉正文首行的 markdown 标题标记（`#`/`##`）再取 80 个字符；字段保留清单（unmapped）标记的是**语义未解释**，与字节数保留（`source_extra`）是两个维度，报告同时给出两者。
+- 同一目标背靠背生成的多个计划，先 apply 的那个会推进共享产物（index/log）依据，其余计划的 apply 因依据漂移被拒（退 4），需重新出计划——多卫星依次汇入时的预期行为，见 [m6-cli-proposal.md](m6-cli-proposal.md) §1。
 
 **Claude Code 会话 jsonl**（实测事件类型，`parentUuid` 构成消息树）：
 

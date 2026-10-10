@@ -265,7 +265,7 @@ impl Writer for OkfWriter {
             target::mapping(
                 "/content",
                 "/frontmatter/title",
-                "first_nonempty_line_80_unicode_characters",
+                "first_nonempty_line_markdown_heading_stripped_80_unicode_characters",
             ),
             target::mapping(
                 "/source_record_id",

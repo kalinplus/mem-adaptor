@@ -166,7 +166,7 @@
         {
           "canonical_path": "/content",
           "target_path": "/frontmatter/title",
-          "rule": "first_nonempty_line_80_unicode_characters"
+          "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
         },
         {
           "canonical_path": "/source_record_id",
@@ -251,7 +251,7 @@
               {
                 "canonical_path": "/content",
                 "target_path": "/frontmatter/title",
-                "rule": "first_nonempty_line_80_unicode_characters"
+                "rule": "first_nonempty_line_markdown_heading_stripped_80_unicode_characters"
               },
               {
                 "canonical_path": "/source_record_id",
@@ -356,5 +356,5 @@
     },
     "conflict_clusters": []
   },
-  "plan_digest": "sha256:9b2f12a301a9ad4eb1ee378187cd0bc3b1204dcf9443073347290f11adfcb304"
+  "plan_digest": "sha256:865f5014dd370a311ed1d4baf215e0fcc56fbab788d70172da29c5a86ec2d04b"
 }

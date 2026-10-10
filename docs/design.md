@@ -509,6 +509,10 @@ Writer 负责生成目标 id 并**在回执报告里记下映射**（源 id ↔ 
 **后果**：
 
 - Reader 交出三样东西：源记录（原样字段）、canonical 记录、未承载字段清单。
+  清单标记的是**语义未解释**的源字段，不是「字节已丢弃」：未被语义映射消耗的字段会同时经
+  `source_extra` 保留（字段映射表记 `preserved_source_extra`），落通用桶的（如 `dna_class` 的
+  `unknown_standard`）也会在清单里再次出现；字节去向看字段映射表，语义解释看清单（实测见
+  [source-memory-formats.md](source-memory-formats.md) Claude Code 小节）。
 - 引擎做两项校验：canonical 记录符合 schema；源记录里的每个字段，要么出现在字段映射表里，
   要么出现在未承载字段清单里，**两边都没有的字段由引擎标出**。这样 Remnic 式的白名单丢字段
   在引擎层就会暴露。
