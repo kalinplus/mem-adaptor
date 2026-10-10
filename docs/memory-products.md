@@ -1,12 +1,12 @@
 # 记忆产品形态总览：我们实验过的八套系统
 
 **这份文档解决什么问题**：Step 0–5b 一共摸过八套系统，每套的落盘形态、身份字段、冲突处理都
-不一样。详细记录散在 [PROGRESS.md](PROGRESS.md)（逐步骤的实验日志）和
-[step4-5-report.md](step4-5-report.md)（逐字段矩阵）里，但**没有一份「一眼看懂八套分别是什么形态」
+不一样。详细记录散在 [PROGRESS.md](archive/PROGRESS.md)（逐步骤的实验日志）和
+[step4-5-report.md](archive/step4-5-report.md)（逐字段矩阵）里，但**没有一份「一眼看懂八套分别是什么形态」
 的总览**。这份文档就是那份总览。
 
 **怎么读**：第 1 节给你一个判断框架（记忆到底存在哪），第 2 节是全表速查，第 3 节逐个讲清机制，
-第 4 节是横向规律。想知道某一条记忆的**具体字段**，去 [step4-5-report.md](step4-5-report.md)。
+第 4 节是横向规律。想知道某一条记忆的**具体字段**，去 [step4-5-report.md](archive/step4-5-report.md)。
 
 **这份文档讲的是「目标侧」**——也就是我们试着往里写的那批系统。从真实平台往外读的「源侧」
 （ChatGPT / Claude / Gemini 导出、Claude Code / Codex 本地记忆）在
@@ -402,9 +402,9 @@ agentmemory 证明了**不出网也能记住东西**，代价是检索质量下�
 
 | 想要什么 | 去哪 |
 | --- | --- |
-| 每条记忆的**完整真实字段**（五套并排的逐字段矩阵） | [step4-5-report.md](step4-5-report.md) 第 7 节 |
-| Step 0–5b 的**逐步骤实验日志**（怎么跑的、踩了什么坑） | [PROGRESS.md](PROGRESS.md) 的「已完成实验记录」 |
-| 八套的**五问对照表** | [PROGRESS.md](PROGRESS.md) 顶部的实验矩阵 |
+| 每条记忆的**完整真实字段**（五套并排的逐字段矩阵） | [step4-5-report.md](archive/step4-5-report.md) 第 7 节 |
+| Step 0–5b 的**逐步骤实验日志**（怎么跑的、踩了什么坑） | [PROGRESS.md](archive/PROGRESS.md) 的「已完成实验记录」 |
+| 八套的**五问对照表** | [PROGRESS.md](archive/PROGRESS.md) 顶部的实验矩阵 |
 | **源侧**（ChatGPT/Claude/Gemini 导出、本地 harness） | [source-memory-formats.md](source-memory-formats.md)、[codex-memory.md](codex-memory.md) |
 | 无导出通道产品怎么抽记忆 | [reader-prompts.md](reader-prompts.md) |
 | 外部项目的完整身份与地址 | [ecosystem.md](ecosystem.md) |

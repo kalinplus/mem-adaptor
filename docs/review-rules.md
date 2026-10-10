@@ -48,7 +48,7 @@ M4 Markdown 双遍试点验证了清单有效性（#19）。
 | 路径 | 必查内容 |
 |---|---|
 | `crates/core/src/source.rs` | testing-policy A（源加载、ZIP、路径、读取失败） |
-| `crates/readers/*/src/**`、`crates/core/src/reader.rs` | testing-policy A 的解析行与 C 的字段保留行；对应 `docs/m4-reader-proposal.md` §1、§5 的约定；未知字段必须保留或列入未承载（铁律 6）；不按正文或文件名猜类别；解析错误不回显源值；只在本地执行（铁律 3） |
+| `crates/readers/*/src/**`、`crates/core/src/reader.rs` | testing-policy A 的解析行与 C 的字段保留行；对应 `docs/archive/m4-reader-proposal.md` §1、§5 的约定；未知字段必须保留或列入未承载（铁律 6）；不按正文或文件名猜类别；解析错误不回显源值；只在本地执行（铁律 3） |
 | `crates/core/src/engine.rs`、`crates/core/src/governance.rs` | testing-policy B（审批、摘要、历史依据）与 D（写入、回读、回执） |
 | `crates/core/src/gate.rs`、`crates/core/rules/**` | testing-policy C 的密钥行；pass 策略允许原样写入，不能误写成“目标无敏感信息” |
 | `crates/writers/*/src/**`、`crates/core/src/writer.rs` | testing-policy D 与 C；embedding 无法承载时有重嵌入计划（铁律 5）；DNA 字段无法承载时显式报告（铁律 6）；不接管无关用户文件 |

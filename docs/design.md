@@ -2,7 +2,7 @@
 
 [AGENTS.md](../AGENTS.md) 里的铁律是**结论**。这份文档解释结论是怎么来的：
 每条决策给出「证据 → 理由 → 后果」，证据来自本仓库的实测（见
-[step4-5-report.md](step4-5-report.md)、[memory-products.md](memory-products.md)、
+[step4-5-report.md](archive/step4-5-report.md)、[memory-products.md](memory-products.md)、
 [source-memory-formats.md](source-memory-formats.md)）和 2026-10-05 对 15 个外部仓库的
 调研（见 [ecosystem.md](ecosystem.md)）。
 
@@ -478,7 +478,7 @@ OMPI（Open Memory Protocol Initiative）的 `convergence-analysis.md` 是与我
   被静默跳过、格式不对的消息只打 warning 跳过；OSS 版不支持 `timestamp` 参数，`created_at`
   会变成迁移时间（`mem0/memory/main.py` 的 `add` 文档字符串与 `_add_to_vector_store`）。
 - **Graphiti 写入是重活**：每个 episode 多次 LLM 调用，实测 25–559 秒/episode 且随图增长
-  （[PROGRESS.md](PROGRESS.md) Step 3）。计划报告要给调用量和耗时预估（DEC-12）。
+  （[PROGRESS.md](archive/PROGRESS.md) Step 3）。计划报告要给调用量和耗时预估（DEC-12）。
 - **Graphiti 不在查询里过滤失效边**：矛盾的边标 `invalid_at`，但已失效的边照样全量返回——
   "事实在 valid_at~invalid_at 之间有效"是写给下游 LLM 的提示词。所以"写进去了"不等于
   "目标会正确过滤"，检索探针要检查这一点。
@@ -680,7 +680,7 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
    直迁没有卫星，location 比较照旧，行为与现在一致。回执目录 `.mem-adaptor/receipts/<卫星 ID>/` 不变（DEC-19）。
 8. **Claude Code 的 `scope_qualifier`** = `<卫星 ID>/<相对父目录>`（父目录为空时只有卫星 ID；
    直迁维持现状的相对父目录）。该值写入扩展块、从家读回时恢复，不随恢复重算。
-9. 与 [m6-cli-proposal.md](m6-cli-proposal.md) §2 的关系：显式 `--satellite`、回执/计划按卫星分目录的推荐保留；
+9. 与 [m6-cli-proposal.md](archive/m6-cli-proposal.md) §2 的关系：显式 `--satellite`、回执/计划按卫星分目录的推荐保留；
    其中「不会因此修改已确认的 canonical id 算法」一句被本 DEC 取代（Issue #22 用户确认），
    「安全的单路径段标识」落实为第 3 条的 8 字符 base32。
 
@@ -706,7 +706,7 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
 （保留、不覆盖），歧义不影响任何决定，所以不需要另存字段快照。家的定位已确认为可维护的主库
 （Issue #22，2026-10-07）：用户的正常内容更新必须被保护，四种变化规则已确认；本 DEC 把它们落实为可判定的
 字段规则与比较基准。边界不变：**受管文件解析失败仍整体失败**（损坏的受管声明不能静默跳过，
-[m4-reader-proposal.md](m4-reader-proposal.md) 契约）；**可解析的用户编辑**走下面的字段级规则，
+[m4-reader-proposal.md](archive/m4-reader-proposal.md) 契约）；**可解析的用户编辑**走下面的字段级规则，
 单文件编辑不中止整个计划，也不静默丢弃。
 
 **后果**：
@@ -758,7 +758,7 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
   维持 `unresolved`。裁决结果写进回执 `verdicts`，重跑沿用（DEC-6、DEC-18）。
 - **删除语义另议**（§6 Q6）：卫星缺席与家文件删除都不当空正文，`source_missing` 与 `deleted_in_target`
   防复活照旧（§0 增量汇总、DEC-18）。
-- 跨卫星共享产物（`index.md` / `log.md`）的对账按 [m6-cli-proposal.md](m6-cli-proposal.md) §1 已确认的推荐执行，本 DEC 不重复。
+- 跨卫星共享产物（`index.md` / `log.md`）的对账按 [m6-cli-proposal.md](archive/m6-cli-proposal.md) §1 已确认的推荐执行，本 DEC 不重复。
 
 **C. 冲突候选的呈现**：复用 DEC-6 的 `conflict_cluster_id` / `conflict_candidates` 结构，簇 basis 为
 「上次写入后双方变化且不同」；每个候选列出来源（卫星 ID + 标签 / 家文件路径）、`content_hash`、`record_hash`。
@@ -847,9 +847,9 @@ conformance、无 normative 依赖）。这验证了我们的定位策略——*
 | OMPI 8 条分歧轴、最小可行标准六节、14 项盲区、5 态回执 | [ecosystem.md](ecosystem.md) 的 OMPI 实测发现；`Open-Memory-Protocol/prior-art/convergence-analysis.md` |
 | IBM 草案 scope→ACL、记忆不可变、必须有 version comparator | 同上；`early-draft-specs/draft-v0.1-ibm.pdf` |
 | AIMEM DNA 五类、embedding 模型名+维度、禁止静默重嵌入 | [ecosystem.md](ecosystem.md) 的 AIMEM 条目；IETF draft §2.2/§2.7/§5.1 |
-| 八套系统身份字段互不兼容、无一家记 embedding 模型名、PII 拦截四连零 | [PROGRESS.md](PROGRESS.md) 五问表；[step4-5-report.md](step4-5-report.md) 逐字段矩阵 |
+| 八套系统身份字段互不兼容、无一家记 embedding 模型名、PII 拦截四连零 | [PROGRESS.md](archive/PROGRESS.md) 五问表；[step4-5-report.md](archive/step4-5-report.md) 逐字段矩阵 |
 | mem0 `infer=True` LLM 改写与 ADD 误判、`infer=False` 跳过 system 消息、OSS 不支持 `timestamp` | [memory-products.md](memory-products.md) 的 mem0 节；`lab/step2-mem0/.venv/.../mem0/memory/main.py`（`add`、`_add_to_vector_store`） |
-| Graphiti 不对 episode 去重、每 episode 25–559 秒、失效边照样返回 | [PROGRESS.md](PROGRESS.md) Step 3 与五问表第 4 问；`lab/step3-graphiti/feed.py` |
+| Graphiti 不对 episode 去重、每 episode 25–559 秒、失效边照样返回 | [PROGRESS.md](archive/PROGRESS.md) Step 3 与五问表第 4 问；`lab/step3-graphiti/feed.py` |
 | Claude/Gemini 导入是粘贴文本、Anthropic 官方 Prompt 格式、ChatGPT 无导入 | [ecosystem.md](ecosystem.md) 的「平台原生导入通道」；[source-memory-formats.md](source-memory-formats.md) |
 | 三类形态（文件式/数据库式/图谱式） | [memory-products.md](memory-products.md) |
 | OKF v0.2：只有 `type` 必需、扩展字段须保留不拒收、git 分发、Concept ID 即路径、v0.1→v0.2 破坏性变更 | `lab/upstream/open-knowledge-format/SPEC.md` §2、§3、§4.1、§5、§7、§9、§11、§13.1 |
