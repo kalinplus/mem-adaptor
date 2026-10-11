@@ -12,6 +12,7 @@ use mem_adaptor_core::engine::{Engine, record_hash, timestamp};
 use mem_adaptor_core::governance::*;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reports::*;
+use mem_adaptor_reader_basic_memory::BasicMemoryReader;
 use mem_adaptor_reader_chatgpt::ChatgptReader;
 use mem_adaptor_reader_claude::ClaudeReader;
 use mem_adaptor_reader_markdown::MarkdownReader;
@@ -1133,4 +1134,102 @@ fn reader_fixtures_work_through_zip_loading_and_explicit_apply() {
                 .any(|entry| entry.verification == Some(Verification::Verified))
         );
     }
+}
+
+/// basic-memory notes keep permalink identity, tags, modified time, and custom fields; the derived
+/// SQLite index is registration-only with its vector layer reported, and wiki relations stay body-only.
+#[test]
+fn basic_memory_notes_use_permalink_identity_and_report_unmigratable_layers() {
+    let output = read(
+        &BasicMemoryReader,
+        files(&[
+            ("memory.db", "sqlite-bytes-placeholder"),
+            (
+                "notes/kal.md",
+                "---\ntitle: Kal\ntype: person\npermalink: memlab/kal\ntags:\n- user-profile\nstatus: active\nmodified: 2026-10-12T08:00:00Z\ncreated: 2026-09-01T00:00:00Z\n---\n# Kal\n\n- Uses [[Obsidian]] for personal notes\n",
+            ),
+            (
+                "chinese.md",
+                "---\ntitle: 中文笔记\ntype: note\npermalink: chinese-note\n---\n# 中文笔记\n\n正文保持原样。\n",
+            ),
+            (
+                "plain.md",
+                "---\ntitle: No Permalink\ntype: note\n---\n\n# Plain\n",
+            ),
+        ]),
+    );
+    // plain.md carries no permalink, so this adapter leaves it to the Markdown reader.
+    assert_eq!(output.iter().flat_map(|item| &item.records).count(), 2);
+    let kal = output
+        .iter()
+        .flat_map(|item| &item.records)
+        .find(|record| record.source_record_id == "memlab/kal")
+        .unwrap();
+    assert_eq!(
+        kal.content,
+        "# Kal\n\n- Uses [[Obsidian]] for personal notes\n"
+    );
+    assert_eq!(kal.source.system, "basic-memory");
+    assert_eq!(kal.source_kind.as_deref(), Some("person"));
+    assert_eq!(kal.tags.as_ref().unwrap(), &["user-profile"]);
+    assert_eq!(
+        kal.updated_at.clone().map(|time| time.to_string()),
+        Some("2026-10-12T08:00:00Z".into())
+    );
+    // Custom frontmatter fields survive via the automatic source_extra preservation.
+    assert_eq!(
+        kal.source_extra.as_ref().unwrap()["frontmatter"]["status"],
+        json!("active")
+    );
+    let anomalies = output
+        .iter()
+        .flat_map(|item| &item.anomalies)
+        .map(|anomaly| anomaly.code.as_str())
+        .collect::<Vec<_>>();
+    assert!(anomalies.contains(&"relations_body_only"));
+    assert!(anomalies.contains(&"derived_vector_index_not_migrated"));
+    assert!(
+        output
+            .iter()
+            .flat_map(|item| &item.source_records)
+            .any(|source| source
+                .field_map
+                .iter()
+                .any(|mapping| mapping.source_path == "/frontmatter/permalink"
+                    && mapping.canonical_path == "/source_record_id"))
+    );
+    let chinese = output
+        .iter()
+        .flat_map(|item| &item.records)
+        .find(|record| record.source_record_id == "chinese-note")
+        .unwrap();
+    assert_eq!(chinese.content, "# 中文笔记\n\n正文保持原样。\n");
+}
+
+/// The two Markdown adapters partition by signature: permalink notes go to basic-memory only,
+/// plain notes to markdown only, and an OKF envelope keeps markdown ownership even when
+/// basic-memory has stamped a permalink onto a managed home file.
+#[test]
+fn markdown_and_basic_memory_claims_partition_by_signature() {
+    let inventory = files(&[
+        (
+            "bm.md",
+            "---\ntitle: Bm\ntype: note\npermalink: bm\n---\n\n# Bm\n",
+        ),
+        (
+            "plain.md",
+            "---\ntitle: Plain\ntype: note\n---\n\n# Plain\n",
+        ),
+        (
+            "home-copy.md",
+            "---\ntype: Memory\nmem_adaptor_envelope: okf:0.2\npermalink: stamped/by-reindex\n---\n\n# Home\n",
+        ),
+    ]);
+    let basic = BasicMemoryReader.claim(&inventory);
+    let markdown = MarkdownReader.claim(&inventory);
+    fn paths(claims: &[Claim]) -> Vec<&str> {
+        claims.iter().map(|claim| claim.path.as_str()).collect()
+    }
+    assert_eq!(paths(&basic), vec!["bm.md"]);
+    assert_eq!(paths(&markdown), vec!["home-copy.md", "plain.md"]);
 }

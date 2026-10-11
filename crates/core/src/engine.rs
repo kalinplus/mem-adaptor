@@ -722,7 +722,18 @@ impl Engine {
                 artifacts: writer.artifacts(
                     &records
                         .values()
-                        .map(|record| writer.plan(record, None).map(|planned| planned.target_id))
+                        .map(|record| {
+                            // Enumerate with the same previous-write input the batch plan uses, so
+                            // a Writer whose target id depends on the prior write (e.g. a basic-memory
+                            // permalink kept stable across a title change) lists the artifact the batch
+                            // will actually touch instead of a fresh-derivation alias.
+                            let previous = previous_entries
+                                .get(&(target.clone(), record.canonical_id.clone()))
+                                .copied();
+                            writer
+                                .plan(record, previous)
+                                .map(|planned| planned.target_id)
+                        })
                         .collect::<Result<Vec<_>>>()?,
                 )?,
             });
@@ -880,15 +891,16 @@ impl Engine {
                                     },
                                 };
                             }
+                            // A duplicate alias must not silently land on a foreign record. The
+                            // prior-write half needs no identity guard: record_hash covers
+                            // canonical_id, so a replaced record reaches the four rules below with
+                            // home_changed already true — which also lets identity-external Writers
+                            // (whose files carry no canonical id) keep the same semantics.
                             Some(actual)
-                                if planned.previous_write.is_some()
-                                    && actual.canonical_id != record.canonical_id
-                                    || planned.previous_write.is_none()
-                                        && planned.duplicate_write.as_ref().is_some_and(
-                                            |reference| {
-                                                reference.canonical_id != actual.canonical_id
-                                            },
-                                        ) =>
+                                if planned.previous_write.is_none()
+                                    && planned.duplicate_write.as_ref().is_some_and(
+                                        |reference| reference.canonical_id != actual.canonical_id,
+                                    ) =>
                             {
                                 planned.disposition = Disposition::Unresolved {
                                     reason: UnresolvedReason::TargetModified,
@@ -899,8 +911,21 @@ impl Engine {
                             // "satellite changed" is the record hash, and a both-changed state needs
                             // the Writer's projection to prove convergence instead of guessing.
                             Some(actual) if planned.previous_write.is_some() => {
-                                let satellite_changed =
-                                    record_hash(&planned.record)? != prior.record_hash;
+                                // A Writer that round-trips the source identity anchors the full
+                                // record hash; an identity-external Writer (whose files carry no
+                                // canonical id) anchors the round-tripped content instead, since its
+                                // reconstruction can never equal the reader-side record hash. A
+                                // tags-only source edit stays visible on that Writer's next
+                                // content change rather than silently overwriting the target.
+                                let satellite_changed = if writer
+                                    .capabilities()
+                                    .supported_fields
+                                    .contains(&"/source_record_id".to_owned())
+                                {
+                                    record_hash(&planned.record)? != prior.record_hash
+                                } else {
+                                    planned.record.content_hash != prior.content_hash
+                                };
                                 let home_changed = record_hash(&actual)? != prior.record_hash
                                     || state.target_hash.as_ref() != Some(&prior.target_hash);
                                 let observed_hash = record_hash(&actual)?;

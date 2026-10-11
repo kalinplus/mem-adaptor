@@ -19,9 +19,11 @@ use mem_adaptor_core::reports::{
     Disposition, PlanReport, SatelliteSpec, UnresolvedReason, Verification,
 };
 use mem_adaptor_core::satellite::RelocationCandidate;
+use mem_adaptor_reader_basic_memory::BasicMemoryReader;
 use mem_adaptor_reader_chatgpt::ChatgptReader;
 use mem_adaptor_reader_claude::ClaudeReader;
 use mem_adaptor_reader_markdown::MarkdownReader;
+use mem_adaptor_writer_basic_memory::BasicMemoryWriter;
 use mem_adaptor_writer_okf::OkfWriter;
 use mem_adaptor_writer_ump::UmpWriter;
 
@@ -523,10 +525,10 @@ fn run_plan(
     let source = normalize_path(&source)?;
     let (writer, target) = to
         .split_once(':')
-        .context("Target must be okf:<directory> or ump:<directory>")?;
+        .context("Target must be okf:<directory>, ump:<directory>, or basic-memory:<directory>")?;
     ensure!(
-        matches!(writer, "okf" | "ump"),
-        "Target must be okf:<directory> or ump:<directory>"
+        matches!(writer, "okf" | "ump" | "basic-memory"),
+        "Target must be okf:<directory>, ump:<directory>, or basic-memory:<directory>"
     );
     let target = mem_adaptor_core::writer::normalize_root(Path::new(target)).context(
         "[S5] Target path validation failed before target writes; target unchanged. Choose a regular target directory, not a linked root, and plan again",
@@ -729,7 +731,7 @@ fn run_apply(plan: PathBuf, receipt: Option<PathBuf>, yes: bool) -> Result<i32> 
         .iter()
         .map(|target| {
             ensure!(
-                matches!(target.writer.as_str(), "okf" | "ump"),
+                matches!(target.writer.as_str(), "okf" | "ump" | "basic-memory"),
                 "Unsupported target Writer"
             );
             Ok((
@@ -1253,10 +1255,14 @@ fn engine(targets: &[(String, String, PathBuf)]) -> Result<Engine> {
     registry.register_reader(MarkdownReader)?;
     registry.register_reader(ChatgptReader)?;
     registry.register_reader(ClaudeReader)?;
+    registry.register_reader(BasicMemoryReader)?;
     for (id, writer, path) in targets {
         match writer.as_str() {
             "okf" => registry.register_writer(id.clone(), OkfWriter::new(path.clone())?)?,
             "ump" => registry.register_writer(id.clone(), UmpWriter::new(path.clone())?)?,
+            "basic-memory" => {
+                registry.register_writer(id.clone(), BasicMemoryWriter::new(path.clone())?)?
+            }
             _ => unreachable!(),
         }
     }

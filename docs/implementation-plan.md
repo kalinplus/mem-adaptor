@@ -338,7 +338,7 @@ D1 完成的标准：用真实的 Claude Code 记忆跑一次完整的「卫星 
 | 项 | 要在那时拍板的点 |
 |---|---|
 | Mem0 Writer（HTTP，`infer=False`） | 能力声明要写明 `created_at` 变成迁移时间、`role=system` 被跳过、目标侧会调 embedding（DEC-15、DEC-12）；§6 Q9 远程去向是否单独一档闸门 |
-| basic-memory Writer | 文件式，复用 writer-okf 的大部分逻辑 |
+| basic-memory Writer | **已交付（#56）**：原生 frontmatter + 显式 permalink，回执侧记账，见 DEC-22；共存实验证明与 basic-memory 互不触碰 |
 | PII 检测（接现成 NER） | Rust 侧没有成熟的 NER：在「Presidio 作为本地子进程」与「ONNX 模型进程内推理」之间选；中文 PII 的覆盖要实测 |
 | 审批钩子（Panella 式哈希链凭证） | 把 D1 的本地审批凭证换成可插拔后端，在 M2 预留所需接口 |
 | 删除语义映射（§6 Q6） | 需先完成设计 |
