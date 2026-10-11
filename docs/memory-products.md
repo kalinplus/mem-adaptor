@@ -137,7 +137,8 @@ tags:
   frontmatter 围栏后插入一个空行。信封字段顺序与值其余不动。
 - **核心结论：预写显式 permalink（裸 slug、无项目前缀亦可）→ reindex 后字节零变化、
   DB 直接采纳该 permalink、中文标题 read-note 正常**。这是 Writer 侧「显式 permalink
-  换取互不触碰」的实验依据。
+  换取互不触碰」的实验依据。Writer 落地后复验：真实产物（含中文回退名）过 reindex
+  同样零变化、三实体全入库、中文检索命中（#56）。
 - 对 A3 重方案（把 mem-adaptor 还在 sync 的 OKF 家注册成 basic-memory project）的判定：
   **当前行为下不可行**——被 basic-memory 追加过 permalink 的家，下一轮 plan 全部
   `unresolved target_untracked`（信封出现未知字段+正文位移，属不可归因外部修改，

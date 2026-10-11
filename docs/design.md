@@ -799,6 +799,32 @@ M5 已确认：`prior_write.target_hash` 额外覆盖原生记录载荷；共享
   （`satellite_id` 非法字符集/长度、`satellite` 缺 `id`、`satellites` 条目缺字段、`home_modified` 缺
   `home_changed_fields`），并注明各自违反哪条约束。
 
+### DEC-22. basic-memory 目标：frontmatter 单一所有者，记账走回执（身份外置 Writer）
+
+**证据**（#56 共存实验 2026-10-12，basic-memory v0.23.2，隔离 HOME + 合成数据，详见
+[memory-products.md](memory-products.md) Step 1）：
+
+- basic-memory 的 sync/reindex 只在 permalink 缺失或失配时改写文件；改写包括尾部追加
+  `permalink`、YAML 值规整（引号/数字/布尔）、正文前补空行——外来信封的语义存活但字节必变。
+- 预写显式 permalink（裸 slug、无项目前缀亦可）的文件，reindex 后**字节零变化**、DB 直接采纳；
+  mem-adaptor Writer 的真实产物过 reindex 同样零变化（实测）。
+- 把 mem-adaptor 还在 sync 的 OKF 家交给 basic-memory 索引，下一轮全部 `unresolved target_untracked`
+  （未知字段+正文位移，引擎按设计拒绝）——A3 重方案不可行，轻方案（AGENTS.md 指针）保留。
+
+**决策**：
+
+1. 写 basic-memory 目标只出**原生 frontmatter**（`title`/`type: note`/显式 `permalink`/可选 `tags`），
+   零外来字段。permalink 纯函数派生（title slug；无 ASCII slug 回退 `note-<canonical_id 前 12>`），
+   不探测文件系统，跨运行稳定。slug 被外来文件占用 → 引擎既有 `unresolved target_untracked` 拒绝
+   覆盖；同批撞 slug → 写入拒绝（fail fast）。
+2. 幂等/防复活/身份映射全走回执（DEC-18 既定位置）；目标文件不自描述 provenance——回执丢失后
+   重建登记（记忆内容本身不丢）。
+3. 引擎为「身份外置 Writer」（capabilities 不含 `/source_record_id`）单设源侧变化判据：按往返内容
+   （content_hash）判，不按全记录哈希；OKF/UMP 均含该字段、行为不变。prior-write 的 canonical_id 相等
+   前置守卫随之移除：record_hash 覆盖 canonical_id，被替换的记录必然落入 home_changed 分支，语义等价。
+4. 放弃项（显式）：非家目标无字段级归因（DEC-15 既有语义）；身份外置 Writer 上 tags-only 的源变化
+   要等下次内容变化才可见。
+
 ## 5. 明确不做的事
 
 | 不做 | 为什么 |
