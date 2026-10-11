@@ -126,6 +126,23 @@ tags:
 **重复调用就重复追加**（无幂等）；② 检索用本地 `bge-small`，那是**英文模型**，
 中文 query 会命中错误的笔记。
 
+**与 mem-adaptor 的共存实验（2026-10-12，v0.23.2，隔离 HOME + 合成 OKF 家）**：
+
+- 索引触发：`tool search-notes` / `read-note` **不触发索引**（观察到文件但实体表为空），
+  索引靠 `reindex` 或 MCP watch 服务；`doctor` 全绿。
+- 容忍度：**完整 OKF 信封文件（`mem_adaptor` 块等外来字段）可被正常索引**——字段容忍、
+  title 取自 frontmatter、中文标题可搜可读。
+- 改写行为（文件无 `permalink` 时，reindex 会动三个地方）：frontmatter 尾部追加
+  `permalink: <project>/<相对路径>`；引号包裹的标量被规整（`"0.1.0"` → `0.1.0`）；
+  frontmatter 围栏后插入一个空行。信封字段顺序与值其余不动。
+- **核心结论：预写显式 permalink（裸 slug、无项目前缀亦可）→ reindex 后字节零变化、
+  DB 直接采纳该 permalink、中文标题 read-note 正常**。这是 Writer 侧「显式 permalink
+  换取互不触碰」的实验依据。
+- 对 A3 重方案（把 mem-adaptor 还在 sync 的 OKF 家注册成 basic-memory project）的判定：
+  **当前行为下不可行**——被 basic-memory 追加过 permalink 的家，下一轮 plan 全部
+  `unresolved target_untracked`（信封出现未知字段+正文位移，属不可归因外部修改，
+  引擎按设计拒绝而非静默吸收）。轻方案（AGENTS.md 指针）维持推荐。
+
 ### Step 2：mem0 —— 「一句话 + 一个向量」
 
 主流记忆库的开源版。**形态和前面几套完全不同：内容不再是原文。**
