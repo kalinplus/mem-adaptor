@@ -16,6 +16,7 @@ mem-adaptor-reader-claude.workspace = true
 mem-adaptor-reader-basic-memory.workspace = true
 mem-adaptor-writer-ump.workspace = true
 mem-adaptor-writer-okf.workspace = true
+mem-adaptor-writer-basic-memory.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

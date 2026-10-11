@@ -568,6 +568,7 @@ dependencies = [
  "mem-adaptor-reader-chatgpt",
  "mem-adaptor-reader-claude",
  "mem-adaptor-reader-markdown",
+ "mem-adaptor-writer-basic-memory",
  "mem-adaptor-writer-okf",
  "mem-adaptor-writer-ump",
  "serde-saphyr",
@@ -638,6 +639,16 @@ dependencies = [
  "anyhow",
  "mem-adaptor-core",
  "regex",
+ "serde-saphyr",
+ "serde_json",
+]
+
+[[package]]
+name = "mem-adaptor-writer-basic-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mem-adaptor-core",
  "serde-saphyr",
  "serde_json",
 ]

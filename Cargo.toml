@@ -6,6 +6,7 @@ members = [
     "crates/readers/claude",
     "crates/readers/basic-memory",
     "crates/writers/ump",
+    "crates/writers/basic-memory",
     "crates/writers/okf",
     "crates/cli",
 ]
@@ -40,3 +41,4 @@ mem-adaptor-reader-claude = { path = "crates/readers/claude" }
 mem-adaptor-reader-basic-memory = { path = "crates/readers/basic-memory" }
 mem-adaptor-writer-ump = { path = "crates/writers/ump" }
 mem-adaptor-writer-okf = { path = "crates/writers/okf" }
+mem-adaptor-writer-basic-memory = { path = "crates/writers/basic-memory" }

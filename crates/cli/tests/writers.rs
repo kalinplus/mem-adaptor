@@ -14,6 +14,7 @@ use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as normalize;
 use mem_adaptor_core::reports::*;
 use mem_adaptor_reader_markdown::MarkdownReader;
+use mem_adaptor_writer_basic_memory::BasicMemoryWriter;
 use mem_adaptor_writer_okf::OkfWriter;
 use mem_adaptor_writer_ump::UmpWriter;
 use serde_json::{Value, json};
@@ -92,6 +93,9 @@ fn engine(directory: &TempDir, record: CanonicalRecord, writer: &str) -> Engine 
             .unwrap(),
         "ump" => registry
             .register_writer("home".into(), UmpWriter::new(path).unwrap())
+            .unwrap(),
+        "basic-memory" => registry
+            .register_writer("home".into(), BasicMemoryWriter::new(path).unwrap())
             .unwrap(),
         _ => unreachable!(),
     }
@@ -1174,4 +1178,237 @@ fn okf_preserves_an_existing_reembedding_plan_instead_of_replacing_it() {
             reason: OmissionReason::AlreadyMigrated
         }
     );
+}
+
+/// The native shape keeps basic-memory's frontmatter (title/type/permalink/tags only, zero foreign
+/// fields) with an explicit permalink, round-trips verified, and the second run is idempotent.
+#[test]
+fn basic_memory_native_shape_round_trips_with_explicit_permalink() {
+    let directory = fixture();
+    let engine = engine(&directory, record(), "basic-memory");
+    let report = plan(&engine, &directory, None);
+    let receipt = apply(&engine, &report).unwrap();
+    assert!(
+        receipt
+            .entries
+            .iter()
+            .all(|entry| entry.verification == Some(Verification::Verified))
+    );
+    let id = record().canonical_id;
+    let name = format!("note-{}", &id[..12]);
+    let text = fs::read_to_string(directory.path().join(format!("target/{name}.md"))).unwrap();
+    assert!(text.starts_with("---\n"));
+    assert!(text.contains("type: note\n"));
+    assert!(text.contains(&format!("permalink: {name}\n")));
+    assert!(text.contains("title: 合成标题"));
+    assert!(text.contains("tags:\n- synthetic"));
+    assert!(text.ends_with("\n# 合成标题\n\nKeep this body.\r\n"));
+    // Single-owner frontmatter: no mem-adaptor envelope leaks into the native shape.
+    assert!(!text.contains("mem_adaptor"));
+    let second = plan(&engine, &directory, Some(&previous(&directory, &receipt)));
+    for entry in &second.entries {
+        println!(
+            "NATIVE-DISP: {:?} prior={:?}",
+            entry.disposition,
+            entry.prior_write.as_ref().map(|p| &p.record_hash)
+        );
+    }
+    assert!(second.entries.iter().all(|entry| matches!(
+        &entry.disposition,
+        Disposition::Omitted {
+            reason: OmissionReason::AlreadyMigrated
+        }
+    )));
+    assert_eq!(
+        fs::read_dir(directory.path().join("target"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+/// A source update rewrites the same permalink file (identity is stable across content changes).
+#[test]
+fn basic_memory_updates_keep_the_permalink_target_stable() {
+    let directory = fixture();
+    let first_engine = engine(&directory, record(), "basic-memory");
+    let receipt = apply(&first_engine, &plan(&first_engine, &directory, None)).unwrap();
+    let id = record().canonical_id;
+    let mut updated = record();
+    updated.content = "\n# 合成标题\n\nEdited body.\n".into();
+    updated.content_hash = content_hash(updated.content.as_bytes());
+    let updated_engine = engine(&directory, updated, "basic-memory");
+    let report = plan(
+        &updated_engine,
+        &directory,
+        Some(&previous(&directory, &receipt)),
+    );
+    assert!(
+        report
+            .entries
+            .iter()
+            .all(|entry| matches!(entry.disposition, Disposition::Accepted))
+    );
+    let receipt = apply(&updated_engine, &report).unwrap();
+    assert!(
+        receipt
+            .entries
+            .iter()
+            .all(|entry| entry.verification == Some(Verification::Verified))
+    );
+    let text = fs::read_to_string(
+        directory
+            .path()
+            .join(format!("target/note-{}.md", &id[..12])),
+    )
+    .unwrap();
+    assert!(text.ends_with("\n# 合成标题\n\nEdited body.\n"));
+    assert_eq!(
+        fs::read_dir(directory.path().join("target"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+/// An externally edited target refuses the next plan as target-modified instead of overwriting.
+#[test]
+fn basic_memory_external_edits_stay_unresolved() {
+    let directory = fixture();
+    let engine = engine(&directory, record(), "basic-memory");
+    let receipt = apply(&engine, &plan(&engine, &directory, None)).unwrap();
+    let id = record().canonical_id;
+    let path = directory
+        .path()
+        .join(format!("target/note-{}.md", &id[..12]));
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replace("Keep this body.", "Edited in basic-memory."),
+    )
+    .unwrap();
+    let report = plan(&engine, &directory, Some(&previous(&directory, &receipt)));
+    assert!(report.entries.iter().all(|entry| matches!(
+        &entry.disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetModified
+        }
+    )));
+    // The drifted bytes survive planning: nothing was written.
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("Edited in basic-memory.")
+    );
+}
+
+/// A foreign file at the derived slug stays untouched as an unresolved target-untracked entry,
+/// and two same-title records in one batch refuse to write rather than clobber each other.
+#[test]
+fn basic_memory_collisions_are_deterministic_and_never_clobber() {
+    let directory = fixture();
+    fs::create_dir(directory.path().join("target")).unwrap();
+    let foreign =
+        "---\ntitle: English Title\ntype: note\npermalink: english-title\n---\nForeign note\n";
+    fs::write(directory.path().join("target/english-title.md"), foreign).unwrap();
+    let mut english = record();
+    english.content = "# English Title\n\nOur own note.\n".into();
+    english.content_hash = content_hash(english.content.as_bytes());
+    let engine = engine(&directory, english.clone(), "basic-memory");
+    let report = plan(&engine, &directory, None);
+    // The slug path is occupied by a file we have no prior write for: refuse instead of clobbering.
+    assert!(report.entries.iter().all(|entry| matches!(
+        &entry.disposition,
+        Disposition::Unresolved {
+            reason: UnresolvedReason::TargetUntracked
+        }
+    )));
+    let receipt = apply(&engine, &report).unwrap();
+    assert!(
+        receipt
+            .entries
+            .iter()
+            .all(|entry| entry.target_id.is_none())
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("target/english-title.md")).unwrap(),
+        foreign
+    );
+    assert_eq!(
+        fs::read_dir(directory.path().join("target"))
+            .unwrap()
+            .count(),
+        1
+    );
+
+    // Two same-title records plan the same fresh permalink; the write refuses instead of clobbering.
+    let directory = TempDir::new().unwrap();
+    fs::create_dir(directory.path().join("source")).unwrap();
+    let mut first = record();
+    first.content = "# Same Title\n".into();
+    first.content_hash = content_hash(first.content.as_bytes());
+    let mut second = record();
+    second.source_record_id = "second-id".into();
+    second.canonical_id =
+        mem_adaptor_core::engine::canonical_id("synthetic-writer", "", "second-id");
+    second.content = "# Same Title\n\nA different body keeps engine dedup away.\n".into();
+    second.content_hash = content_hash(second.content.as_bytes());
+    struct TwoRecords(Vec<CanonicalRecord>);
+    impl Reader for TwoRecords {
+        fn id(&self) -> &'static str {
+            "two-records"
+        }
+        fn version(&self) -> &'static str {
+            "test"
+        }
+        fn source_kind(&self) -> SourceKind {
+            SourceKind::Directory
+        }
+        fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
+            inventory
+                .keys()
+                .map(|path| Claim {
+                    path: path.clone(),
+                    layer: "auto_memory".into(),
+                    registered_only: false,
+                })
+                .collect()
+        }
+        fn read(
+            &self,
+            claim: &Claim,
+            _source: &SourceFs,
+        ) -> mem_adaptor_core::Result<ReaderOutput> {
+            let index = claim
+                .path
+                .trim_end_matches(".json")
+                .parse::<usize>()
+                .unwrap();
+            let mut output = normalize::output();
+            let record = self.0[index].clone();
+            normalize::finish(
+                &mut output,
+                record.clone(),
+                normalize::source(&record, &claim.path, json!({})),
+            )?;
+            Ok(output)
+        }
+    }
+    let mut registry = Registry::default();
+    registry
+        .register_reader(TwoRecords(vec![first, second]))
+        .unwrap();
+    registry
+        .register_writer(
+            "home".into(),
+            BasicMemoryWriter::new(directory.path().join("target")).unwrap(),
+        )
+        .unwrap();
+    let engine = Engine { registry };
+    fs::write(directory.path().join("source/0.json"), "").unwrap();
+    fs::write(directory.path().join("source/1.json"), "").unwrap();
+    let report = plan(&engine, &directory, None);
+    let error = format!("{:#}", apply(&engine, &report).unwrap_err());
+    assert!(error.contains("Duplicate permalink"), "{error}");
+    assert!(!directory.path().join("target/same-title.md").exists());
 }
