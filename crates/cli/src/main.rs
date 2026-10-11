@@ -19,6 +19,7 @@ use mem_adaptor_core::reports::{
     Disposition, PlanReport, SatelliteSpec, UnresolvedReason, Verification,
 };
 use mem_adaptor_core::satellite::RelocationCandidate;
+use mem_adaptor_reader_basic_memory::BasicMemoryReader;
 use mem_adaptor_reader_chatgpt::ChatgptReader;
 use mem_adaptor_reader_claude::ClaudeReader;
 use mem_adaptor_reader_markdown::MarkdownReader;
@@ -1253,6 +1254,7 @@ fn engine(targets: &[(String, String, PathBuf)]) -> Result<Engine> {
     registry.register_reader(MarkdownReader)?;
     registry.register_reader(ChatgptReader)?;
     registry.register_reader(ClaudeReader)?;
+    registry.register_reader(BasicMemoryReader)?;
     for (id, writer, path) in targets {
         match writer.as_str() {
             "okf" => registry.register_writer(id.clone(), OkfWriter::new(path.clone())?)?,

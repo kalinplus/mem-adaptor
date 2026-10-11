@@ -13,6 +13,41 @@ use serde_json::{Value, json};
 
 pub struct MarkdownReader;
 
+/// Returns the raw frontmatter YAML text of a Markdown document, if any parses at all.
+fn frontmatter_text(text: &str) -> Option<&str> {
+    match normalize::markdown_document(text) {
+        Ok((Some(yaml), _)) => Some(yaml),
+        _ => None,
+    }
+}
+
+/// True when a Markdown file carries basic-memory's identity signature (string `permalink`, no OKF
+/// envelope); such files belong to the basic-memory reader, except inside an OKF home re-read where
+/// the managed envelope keeps markdown ownership even after basic-memory stamped a permalink.
+fn basic_memory_signature(inventory: &FileInventory, path: &str, home: bool) -> bool {
+    if home && matches!(path, "index.md" | "log.md") {
+        return false;
+    }
+    let Some(text) = inventory
+        .get(path)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+    else {
+        return false;
+    };
+    let Some(yaml) = frontmatter_text(text) else {
+        return false;
+    };
+    let Ok(Some(frontmatter)) = normalize::frontmatter(yaml) else {
+        return false;
+    };
+    frontmatter
+        .get("permalink")
+        .is_some_and(serde_json::Value::is_string)
+        && !frontmatter
+            .get("mem_adaptor_envelope")
+            .is_some_and(serde_json::Value::is_string)
+}
+
 impl Reader for MarkdownReader {
     /// Registers this adapter under Markdown while records may retain a more specific source-system identity.
     fn id(&self) -> &'static str {
@@ -27,8 +62,10 @@ impl Reader for MarkdownReader {
         SourceKind::Directory
     }
 
-    /// Claims Markdown except runtime artifacts and ChatGPT Prompt files reserved for another adapter.
-    /// Marks MEMORY.md and version-only native OKF root index/log files registration-only without requiring ownership.
+    /// Claims Markdown except runtime artifacts, ChatGPT Prompt files reserved for another adapter,
+    /// and basic-memory notes (frontmatter `permalink` without an OKF envelope, whose identity and
+    /// metadata belong to that adapter). Marks MEMORY.md and version-only native OKF root index/log
+    /// files registration-only without requiring ownership.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
         let home = inventory.get("index.md").is_some_and(|bytes| {
             std::str::from_utf8(bytes)
@@ -41,6 +78,7 @@ impl Reader for MarkdownReader {
                 path.ends_with(".md")
                     && !path.starts_with(".mem-adaptor/")
                     && !path.ends_with(".chatgpt.md")
+                    && !basic_memory_signature(inventory, path, home)
             })
             .map(|path| {
                 let index = path.rsplit('/').next() == Some("MEMORY.md")

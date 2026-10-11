@@ -4,6 +4,7 @@ members = [
     "crates/readers/markdown",
     "crates/readers/chatgpt",
     "crates/readers/claude",
+    "crates/readers/basic-memory",
     "crates/writers/ump",
     "crates/writers/okf",
     "crates/cli",
@@ -36,5 +37,6 @@ mem-adaptor-core = { path = "crates/core" }
 mem-adaptor-reader-markdown = { path = "crates/readers/markdown" }
 mem-adaptor-reader-chatgpt = { path = "crates/readers/chatgpt" }
 mem-adaptor-reader-claude = { path = "crates/readers/claude" }
+mem-adaptor-reader-basic-memory = { path = "crates/readers/basic-memory" }
 mem-adaptor-writer-ump = { path = "crates/writers/ump" }
 mem-adaptor-writer-okf = { path = "crates/writers/okf" }
