@@ -60,9 +60,10 @@ impl BasicMemoryWriter {
 
     /// Derives a fresh permalink identity purely from the record: the title slug when it yields
     /// ASCII content, otherwise an id-based name. Derivation never probes the filesystem, so the
-    /// engine's plan-time artifact enumeration and later runs agree; a foreign file already at the
-    /// slug path surfaces as an unresolved target-untracked entry instead of being clobbered, and
-    /// two same-title records refuse their batch rather than overwrite each other.
+    /// engine's plan-time artifact enumeration and later runs agree. A parseable foreign file at
+    /// the slug path surfaces as an unresolved target-untracked entry instead of being clobbered
+    /// (an unparseable occupant fails the plan outright); two same-title records refuse their
+    /// batch rather than overwrite each other.
     fn fresh_permalink(record: &CanonicalRecord) -> String {
         let slug = slugify(&target::title(record));
         if slug.is_empty() {
@@ -193,8 +194,9 @@ impl Writer for BasicMemoryWriter {
                     "Update identity does not match previous write"
                 );
                 let actual = self.inspect(&prior.target_id)?;
-                // A target that moved after approval is an execution-basis mismatch, whether it was
-                // deleted or edited, so the exit code stays the same across those two outcomes.
+                // A target that moved after approval fails the execution-basis check when it was
+                // deleted or edited (an unparseable edit instead surfaces as an ordinary error
+                // from `inspect`, which is equally refusing but a different exit class).
                 let Some(actual) = actual else {
                     return Err(anyhow::Error::new(BasisMismatch::new(
                         "Target deleted after approval",

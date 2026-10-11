@@ -1206,13 +1206,6 @@ fn basic_memory_native_shape_round_trips_with_explicit_permalink() {
     // Single-owner frontmatter: no mem-adaptor envelope leaks into the native shape.
     assert!(!text.contains("mem_adaptor"));
     let second = plan(&engine, &directory, Some(&previous(&directory, &receipt)));
-    for entry in &second.entries {
-        println!(
-            "NATIVE-DISP: {:?} prior={:?}",
-            entry.disposition,
-            entry.prior_write.as_ref().map(|p| &p.record_hash)
-        );
-    }
     assert!(second.entries.iter().all(|entry| matches!(
         &entry.disposition,
         Disposition::Omitted {
@@ -1411,4 +1404,59 @@ fn basic_memory_collisions_are_deterministic_and_never_clobber() {
     let error = format!("{:#}", apply(&engine, &report).unwrap_err());
     assert!(error.contains("Duplicate permalink"), "{error}");
     assert!(!directory.path().join("target/same-title.md").exists());
+}
+
+/// A title change on an ASCII-slug record updates the same permalink file: the plan's artifact
+/// enumeration must agree with the batch's prior-anchored target id (review P1 regression).
+#[test]
+fn basic_memory_title_change_updates_the_same_permalink_file() {
+    let directory = fixture();
+    let mut kal = record();
+    kal.content = "# Kal\n\nOriginal body.\n".into();
+    kal.content_hash = content_hash(kal.content.as_bytes());
+    let first_engine = engine(&directory, kal.clone(), "basic-memory");
+    let receipt = apply(&first_engine, &plan(&first_engine, &directory, None)).unwrap();
+    assert!(target_has_only(&directory, "kal.md"));
+
+    let mut renamed = kal.clone();
+    renamed.content = "# Kal Renamed\n\nUpdated body.\n".into();
+    renamed.content_hash = content_hash(renamed.content.as_bytes());
+    let renamed_engine = engine(&directory, renamed, "basic-memory");
+    let report = plan(
+        &renamed_engine,
+        &directory,
+        Some(&previous(&directory, &receipt)),
+    );
+    assert!(
+        report
+            .entries
+            .iter()
+            .all(|entry| matches!(entry.disposition, Disposition::Accepted))
+    );
+    let receipt = apply(&renamed_engine, &report).unwrap();
+    assert!(
+        receipt
+            .entries
+            .iter()
+            .all(|entry| entry.verification == Some(Verification::Verified))
+    );
+    assert!(target_has_only(&directory, "kal.md"));
+    let text = fs::read_to_string(directory.path().join("target/kal.md")).unwrap();
+    assert!(text.contains("permalink: kal\n"));
+    assert!(text.contains("title: Kal Renamed"));
+    assert!(text.ends_with("# Kal Renamed\n\nUpdated body.\n"));
+}
+
+/// True when the target holds exactly the one named regular file.
+fn target_has_only(directory: &TempDir, name: &str) -> bool {
+    let mut entries = fs::read_dir(directory.path().join("target"))
+        .unwrap()
+        .flatten();
+    let single = entries
+        .next()
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .into_owned();
+    single == name
 }

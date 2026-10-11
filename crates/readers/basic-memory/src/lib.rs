@@ -7,6 +7,7 @@
 use anyhow::Context;
 use mem_adaptor_core::Result;
 use mem_adaptor_core::canonical::*;
+use mem_adaptor_core::okf;
 use mem_adaptor_core::plugins::*;
 use mem_adaptor_core::reader as normalize;
 use regex::Regex;
@@ -39,7 +40,14 @@ impl Reader for BasicMemoryReader {
     /// Claims the derived SQLite index registration-only, plus notes whose frontmatter carries a
     /// string `permalink` (basic-memory's identity field) without an OKF envelope. Files without
     /// the signature stay with the Markdown reader; parse failures likewise fall through to it.
+    /// An OKF home's native `index.md`/`log.md` stay with the Markdown reader even if basic-memory
+    /// stamped a permalink onto them, mirroring that reader's home exemption.
     fn claim(&self, inventory: &FileInventory) -> Vec<Claim> {
+        let home = inventory.get("index.md").is_some_and(|bytes| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .is_some_and(|text| okf::native_index(text).unwrap_or(false))
+        });
         let mut claims = Vec::new();
         if inventory.contains_key("memory.db") {
             claims.push(Claim {
@@ -53,6 +61,7 @@ impl Reader for BasicMemoryReader {
                 || path.starts_with(".mem-adaptor/")
                 || path.ends_with(".chatgpt.md")
                 || path.rsplit('/').next() == Some("MEMORY.md")
+                || home && matches!(path.as_str(), "index.md" | "log.md")
             {
                 continue;
             }

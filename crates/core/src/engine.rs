@@ -722,7 +722,18 @@ impl Engine {
                 artifacts: writer.artifacts(
                     &records
                         .values()
-                        .map(|record| writer.plan(record, None).map(|planned| planned.target_id))
+                        .map(|record| {
+                            // Enumerate with the same previous-write input the batch plan uses, so
+                            // a Writer whose target id depends on the prior write (e.g. a basic-memory
+                            // permalink kept stable across a title change) lists the artifact the batch
+                            // will actually touch instead of a fresh-derivation alias.
+                            let previous = previous_entries
+                                .get(&(target.clone(), record.canonical_id.clone()))
+                                .copied();
+                            writer
+                                .plan(record, previous)
+                                .map(|planned| planned.target_id)
+                        })
                         .collect::<Result<Vec<_>>>()?,
                 )?,
             });
