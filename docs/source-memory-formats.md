@@ -45,7 +45,7 @@
 | 系统 | 导出路径 | 文件 | 缺口 |
 | --- | --- | --- | --- |
 | ChatGPT | Settings → Data Controls → Export data（邮件链接 24h 有效，最长 7 天） | `conversations.json`（mapping 树 + `current_node`）、`chat.html`、`user.json`、`message_feedback.json`、`model_comparisons.json`、`shared_conversations.json`，记忆见下 | **无 per-entry provenance**（没有 `source_conversation_id`）；合成层（memory summary / reference chat history）没有独立导出；删除的条目不在导出，`enabled:false` 的保留；Team/Enterprise 的 workspace 导出不含成员记忆（记忆是账号级） |
-| ChatGPT 记忆文件 | 同上 | **不在导出包里**（第三方对真实导出包的核对结论：自定义指令包含、记忆不包含） | 记忆是「持续更新的合成物」，不是可落盘文件；官方对导出的措辞只有含糊的「聊天记录和其他相关账号数据」。→ 只能走 Prompt 抽取，见 [reader-prompts.md](reader-prompts.md)。仍**待真导出核实** |
+| ChatGPT 记忆文件 | 同上 | **不在导出包里**（第三方对真实导出包的核对结论：自定义指令包含、记忆不包含） | 记忆是「持续更新的合成物」，不是可落盘文件；官方对导出的措辞只有含糊的「聊天记录和其他相关账号数据」。→ 只能走 Prompt 抽取，见 [reader-prompts.md](reader-prompts.md)。已多源核实（2026-10-12）：两个独立导出工具作者的完整文件清单（conversations/shared_conversations/user/tool_messages/图片）均无记忆文件；memhaul 另报**新版导出连自定义指令都不再包含** |
 | Claude.ai | Settings → Privacy / Data → Export Data（ZIP） | `conversations.json`、`projects.json`、`memories.json`、`users.json` | 官方 FAQ 明说「All memory data is included in data exports」。`memories.json` = **单元素数组**：新版 `memory_files[]{path,content,updated_at}` + 旧版 `conversations_memory`/`project_memories`/`account_uuid`（详见 [PROGRESS.md](archive/PROGRESS.md) 的「网页端记忆导出形态」一节）。`conversations.json` 里有 `project_uuid` 但没有 project 名字 |
 | Gemini | takeout.google.com：勾 `Gemini`（Gems）+ `My Activity` → 只勾 `Gemini Apps` | `My Activity.json`（Gemini Apps 段，走 Google Data Portability 的 My Activity schema） | **只有用户 prompt，没有任何模型回复**；记忆**结构上就导不出**——它是从活动记录检索归纳出的派生层，官方文档里没有任何记忆/个性化导出选项 |
 
@@ -186,8 +186,8 @@ response_item   → 真实消息、工具调用与工具输出
 
 | # | 问题 | 现状（2026-10-04） | 怎么核实 |
 | --- | --- | --- | --- |
-| 1 | ChatGPT 的记忆到底在不在导出包里 | 第三方对真实导出包的核对结论是**不在**（自定义指令包含、记忆不包含）；官方措辞含糊。**按「不在」设计**，所以配了 Prompt 兜底 | 真跑一次 Settings → Data Controls → Export data，打开 ZIP 确认有没有记忆文件（help.openai.com 直连 403） |
-| 2 | Claude.ai `memories.json` 的真实结构 | 已定型：**单元素数组**，新版 `memory_files[]{path,content,updated_at}` + 旧版 `conversations_memory`/`project_memories`/`account_uuid`。但**具体内容形态仍是第三方口径**（`path` 命名规律、`content` 有没有 frontmatter 说法不一） | 真跑一次 Claude.ai Export Data，重点看 `memory_files` 的实际 `path` 与 `content` 形状 |
+| 1 | ChatGPT 的记忆到底在不在导出包里 | **已多源核实：不在**（2026-10-12）。第三方导出工具作者公布的完整导出清单均无记忆文件，与既有第三方核对结论一致；另据 memhaul，新版导出自定义指令也可能不再包含（Reader 对此安全：没指令就没记录）。**按「不在」设计成立**，Prompt 兜底不变 | 本机亲手导出一次做可选终验；重点看有无 saved_memories/memory 类文件与 user.json 的自定义指令字段 |
+| 2 | Claude.ai `memories.json` 的真实结构 | **已实测核实**（2026-10-12，4 份公开仓库中的真实导出，结构问题对任何真实导出都有效）：单元素数组；新版 `memory_files[]{path,content,updated_at}` 中 `path` 为带前导斜杠的 `/profile.md`、`/preferences.md`、`/areas/*.md`、`/topics/*.md`；`content` 带 `name`+`description` 的 YAML frontmatter（可带 `sources`）。版本分叉实锤：旧导出仅 `account_uuid`+`conversations_memory`，中间态有 `project_memories` 无 `memory_files`。Claude Reader 对五份导出实跑全绿，记录数精确对上 | 已完成；无需本机导出 |
 | 3 | Gemini 记忆是否完全不可导出 | 结论**确认**：Takeout 只有「Gemini」（Gems 配置）和「我的活动记录 → Gemini 应用」（对话/媒体/上传）两个入口，官方文档无任何记忆/个性化导出选项；记忆是从活动记录归纳的派生层 | 实测一次 Takeout，确认 `My Activity.json` 里有没有任何记忆段（预期：无） |
-| 4 | Claude.ai 的 project instructions 文本与 knowledge 文件字节是否在导出里 | 仍未定；`projects.json` 的 `docs[]` 含 `content`，但 `memories.json` 的 `project_memories` 与它是否重叠、project instructions 落哪个字段不清楚 | 用一份真导出对照 `projects.json` 与 `memories.json` 的 `project_memories` |
+| 4 | Claude.ai 的 project instructions 文本与 knowledge 文件字节是否在导出里 | **大半核实**（2026-10-12）：`projects.json` 真实形状 = `prompt_template` + `docs[]{content,filename,uuid,created_at}`（知识文件全文字节在）；`memories.json` 的 `project_memories` 是按项目 UUID 的合成记忆，与 `projects.json` 的指令/知识是**不同语义槽**，不是重叠拷贝。残留：没有一份样本同时含非空 `prompt_template` 与 `project_memories`，内容级重叠无法 100% 关闭（不阻塞） | 需一份同时含两者的真实导出（公开或本机均可） |
 | 5 | Codex memories pipeline 的真实产物格式与官方默认值 | 已展开到 [codex-memory.md](codex-memory.md) 的待核实清单（需先打开 `[features] memories`） | 同 codex-memory.md |
